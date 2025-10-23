@@ -185,6 +185,64 @@ check_dependencies() {
     return 0
 }
 
+install_dependencies_if_needed() {
+    local deps=("jq" "curl" "dnsutils" "netcat-openbsd")
+    local missing=()
+    local to_install=()
+
+    # Map command names to package names
+    declare -A pkg_map=(
+        ["jq"]="jq"
+        ["curl"]="curl"
+        ["dig"]="dnsutils"
+        ["nc"]="netcat-openbsd"
+    )
+
+    # Check which dependencies are missing
+    for cmd in "${!pkg_map[@]}"; do
+        if ! command -v "${cmd}" &> /dev/null; then
+            local pkg="${pkg_map[$cmd]}"
+            if [[ ! " ${to_install[@]} " =~ " ${pkg} " ]]; then
+                to_install+=("${pkg}")
+                missing+=("${cmd}")
+            fi
+        fi
+    done
+
+    # If nothing missing, we're good
+    if [[ ${#missing[@]} -eq 0 ]]; then
+        log_success "All dependencies already installed"
+        return 0
+    fi
+
+    # Inform user about missing dependencies
+    log_warning "Missing dependencies: ${missing[*]}"
+    log_info "Will install packages: ${to_install[*]}"
+
+    # Dry run mode - don't actually install
+    if [[ "${DRY_RUN}" == "true" ]]; then
+        log_info "[DRY RUN] Would install: apt-get install -y ${to_install[*]}"
+        return 0
+    fi
+
+    # Update package list
+    log_info "Updating package list..."
+    if ! apt-get update -qq 2>&1 | grep -v "^Get:" | grep -v "^Hit:" | grep -v "^Ign:" >/dev/null; then
+        log_warning "apt-get update had some warnings, continuing..."
+    fi
+
+    # Install missing packages
+    log_info "Installing packages: ${to_install[*]}..."
+    if apt-get install -y -qq "${to_install[@]}" >/dev/null 2>&1; then
+        log_success "Dependencies installed successfully"
+        return 0
+    else
+        log_error "Failed to install dependencies"
+        log_info "Please install manually: apt-get install -y ${to_install[*]}"
+        return 1
+    fi
+}
+
 check_x_ui_service() {
     if ! systemctl is-active --quiet x-ui; then
         log_warning "x-ui service is not running"
@@ -484,7 +542,7 @@ parse_common_args() {
 # Export functions
 export -f log log_info log_success log_warning log_error log_debug log_change
 export -f init_logging init_backup_dir
-export -f check_root check_disk_space check_dependencies check_x_ui_service check_x_ui_config find_x_ui_config
+export -f check_root check_disk_space check_dependencies install_dependencies_if_needed check_x_ui_service check_x_ui_config find_x_ui_config
 export -f backup_config validate_json apply_config
 export -f restart_x_ui
 export -f test_connectivity test_dns

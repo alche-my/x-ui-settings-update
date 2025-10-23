@@ -232,7 +232,10 @@ run_preflight_checks() {
 
     check_root || exit_with_error 4 "Root privileges required"
     check_disk_space 100 || exit_with_error 1 "Insufficient disk space"
-    check_dependencies || exit_with_error 1 "Missing required dependencies"
+
+    # Auto-install dependencies if needed
+    install_dependencies_if_needed || exit_with_error 1 "Failed to install dependencies"
+
     check_x_ui_service || exit_with_error 2 "x-ui service not available"
 
     local config_path=$(check_x_ui_config)
