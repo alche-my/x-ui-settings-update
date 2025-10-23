@@ -1,0 +1,36 @@
+# Cloudflare Domains for DPI Bypass
+# Source: GitHub Issue #5704 (Oct 20-23, 2025)
+#
+# These domains should be added to routing rules for Level 2 configuration
+# to bypass Cloudflare-specific blocking in Russia
+
+1.1.1.1
+1.0.0.1
+embed.cloudflarestream.com
+cloudflare-dns.com
+one.one.one.one
+help.every1dns.net
+cloudflare-esni.com
+cloudflare-gateway.com
+cloudflare-quic.com
+cloudflare.com
+cloudflare.net
+cloudflare.tv
+cloudflareaccess.com
+cloudflareapps.com
+cloudflarebolt.com
+cloudflareclient.com
+cloudflareinsights.com
+cloudflareok.com
+cloudflarepartners.com
+cloudflareportal.com
+cloudflarepreview.com
+cloudflareresolve.com
+cloudflaressl.com
+cloudflarestatus.com
+cloudflarestorage.com
+cloudflarestream.com
+cloudflaretest.com
+cloudflarewarp.com
+cloudflare-ech.com
+encryptedsni.com
