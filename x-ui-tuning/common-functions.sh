@@ -53,30 +53,30 @@ log() {
         echo "${log_entry}" >> "${LOG_FILE}"
     fi
 
-    # Output to console with colors
+    # Output to console with colors (to stderr to not interfere with function returns)
     case "${level}" in
         "INFO")
-            echo -e "${COLOR_CYAN}[ℹ]${COLOR_RESET} ${message}"
+            echo -e "${COLOR_CYAN}[ℹ]${COLOR_RESET} ${message}" >&2
             ;;
         "SUCCESS")
-            echo -e "${COLOR_GREEN}[✓]${COLOR_RESET} ${message}"
+            echo -e "${COLOR_GREEN}[✓]${COLOR_RESET} ${message}" >&2
             ;;
         "WARNING")
-            echo -e "${COLOR_YELLOW}[⚠]${COLOR_RESET} ${message}"
+            echo -e "${COLOR_YELLOW}[⚠]${COLOR_RESET} ${message}" >&2
             ;;
         "ERROR")
-            echo -e "${COLOR_RED}[✗]${COLOR_RESET} ${message}"
+            echo -e "${COLOR_RED}[✗]${COLOR_RESET} ${message}" >&2
             ;;
         "DEBUG")
             if [[ "${VERBOSE}" == "true" ]]; then
-                echo -e "${COLOR_MAGENTA}[DEBUG]${COLOR_RESET} ${message}"
+                echo -e "${COLOR_MAGENTA}[DEBUG]${COLOR_RESET} ${message}" >&2
             fi
             ;;
         "CHANGE")
-            echo -e "${COLOR_BLUE}[+]${COLOR_RESET} ${message}"
+            echo -e "${COLOR_BLUE}[+]${COLOR_RESET} ${message}" >&2
             ;;
         *)
-            echo "${message}"
+            echo "${message}" >&2
             ;;
     esac
 }
@@ -451,17 +451,17 @@ print_header() {
     local title=$1
     local width=50
 
-    echo ""
-    echo -e "${COLOR_CYAN}$(printf '=%.0s' {1..50})${COLOR_RESET}"
-    echo -e "${COLOR_CYAN}${title}${COLOR_RESET}"
-    echo -e "${COLOR_CYAN}$(printf '=%.0s' {1..50})${COLOR_RESET}"
-    echo ""
+    echo "" >&2
+    echo -e "${COLOR_CYAN}$(printf '=%.0s' {1..50})${COLOR_RESET}" >&2
+    echo -e "${COLOR_CYAN}${title}${COLOR_RESET}" >&2
+    echo -e "${COLOR_CYAN}$(printf '=%.0s' {1..50})${COLOR_RESET}" >&2
+    echo "" >&2
 }
 
 print_footer() {
-    echo ""
-    echo -e "${COLOR_CYAN}$(printf '=%.0s' {1..50})${COLOR_RESET}"
-    echo ""
+    echo "" >&2
+    echo -e "${COLOR_CYAN}$(printf '=%.0s' {1..50})${COLOR_RESET}" >&2
+    echo "" >&2
 }
 
 print_summary() {
@@ -469,10 +469,10 @@ print_summary() {
     shift
     local items=("$@")
 
-    echo ""
-    echo -e "${COLOR_BLUE}📊 ${title}${COLOR_RESET}"
+    echo "" >&2
+    echo -e "${COLOR_BLUE}📊 ${title}${COLOR_RESET}" >&2
     for item in "${items[@]}"; do
-        echo -e "  ${item}"
+        echo -e "  ${item}" >&2
     done
 }
 
@@ -483,9 +483,9 @@ confirm_action() {
         return 0
     fi
 
-    echo -e "${COLOR_YELLOW}${message}${COLOR_RESET}"
+    echo -e "${COLOR_YELLOW}${message}${COLOR_RESET}" >&2
     read -p "Continue? (y/N): " -n 1 -r
-    echo
+    echo >&2
     if [[ ! $REPLY =~ ^[Yy]$ ]]; then
         log_warning "Operation cancelled by user"
         return 1
