@@ -99,18 +99,23 @@ Level 3: Advanced (планируется)
 
 ### Зависимости
 
-```bash
-# Установить все зависимости
-apt-get update
-apt-get install -y jq curl dnsutils netcat-openbsd
-```
+**Устанавливаются автоматически!** ✨
 
-Список зависимостей:
+При запуске скрипта автоматически проверяются и устанавливаются:
 - `jq` - для работы с JSON конфигурациями
 - `curl` - для HTTP тестов
 - `dig` (dnsutils) - для DNS тестов
 - `nc` (netcat) - для TCP тестов
 - `systemctl` - для управления сервисами (обычно встроен)
+
+<details>
+<summary>Ручная установка (если автоматическая не сработала)</summary>
+
+```bash
+apt-get update
+apt-get install -y jq curl dnsutils netcat-openbsd
+```
+</details>
 
 ---
 
@@ -120,26 +125,28 @@ apt-get install -y jq curl dnsutils netcat-openbsd
 
 ```bash
 cd /root
-git clone <repository-url> x-ui-tuning
-cd x-ui-tuning
+git clone https://github.com/alche-my/x-ui-settings-update.git
+cd x-ui-settings-update/x-ui-tuning
 ```
 
 Или скопируйте файлы вручную на сервер.
 
 ### 2. Установка зависимостей
 
+**Не требуется!** ✨ Скрипт автоматически установит всё необходимое.
+
+<details>
+<summary>Ручная установка (опционально)</summary>
+
+Если хотите установить зависимости заранее:
+
 ```bash
 apt-get update
 apt-get install -y jq curl dnsutils netcat-openbsd
 ```
+</details>
 
-### 3. Проверка прав
-
-```bash
-chmod +x *.sh
-```
-
-### 4. Проверка структуры
+### 3. Проверка структуры
 
 ```bash
 ls -lh

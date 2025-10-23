@@ -191,36 +191,36 @@ generate_test_report() {
     local tests_passed=$1
     local tests_total=$2
 
-    echo ""
-    echo -e "${COLOR_BLUE}🧪 Connectivity Test Results${COLOR_RESET}"
-    echo -e "  Tests passed: ${tests_passed}/${tests_total}"
+    echo "" >&2
+    echo -e "${COLOR_BLUE}🧪 Connectivity Test Results${COLOR_RESET}" >&2
+    echo -e "  Tests passed: ${tests_passed}/${tests_total}" >&2
 
     if [[ ${tests_passed} -eq ${tests_total} ]]; then
-        echo -e "  ${COLOR_GREEN}All tests passed!${COLOR_RESET}"
+        echo -e "  ${COLOR_GREEN}All tests passed!${COLOR_RESET}" >&2
     elif [[ ${tests_passed} -eq 0 ]]; then
-        echo -e "  ${COLOR_RED}All tests failed!${COLOR_RESET}"
-        echo -e "  ${COLOR_YELLOW}This might be normal if testing from the server itself.${COLOR_RESET}"
-        echo -e "  ${COLOR_YELLOW}Test from your client using v2Ray to verify.${COLOR_RESET}"
+        echo -e "  ${COLOR_RED}All tests failed!${COLOR_RESET}" >&2
+        echo -e "  ${COLOR_YELLOW}This might be normal if testing from the server itself.${COLOR_RESET}" >&2
+        echo -e "  ${COLOR_YELLOW}Test from your client using v2Ray to verify.${COLOR_RESET}" >&2
     else
-        echo -e "  ${COLOR_YELLOW}Some tests failed.${COLOR_RESET}"
+        echo -e "  ${COLOR_YELLOW}Some tests failed.${COLOR_RESET}" >&2
     fi
 }
 
 generate_next_steps() {
-    echo ""
-    echo -e "${COLOR_BLUE}🔄 Next Steps${COLOR_RESET}"
-    echo "  1. Test from your client using v2Ray with your VLESS key"
-    echo "  2. Check access to Discord, YouTube, Google"
-    echo "  3. If stable after 5-10 minutes, proceed to Level 2"
-    echo "  4. If issues occur, use rollback command below"
+    echo "" >&2
+    echo -e "${COLOR_BLUE}🔄 Next Steps${COLOR_RESET}" >&2
+    echo "  1. Test from your client using v2Ray with your VLESS key" >&2
+    echo "  2. Check access to Discord, YouTube, Google" >&2
+    echo "  3. If stable after 5-10 minutes, proceed to Level 2" >&2
+    echo "  4. If issues occur, use rollback command below" >&2
 }
 
 generate_rollback_info() {
     local backup_file=$1
 
-    echo ""
-    echo -e "${COLOR_YELLOW}⚠️  Rollback Command (if needed)${COLOR_RESET}"
-    echo "  ${SCRIPT_DIR}/rollback.sh ${backup_file}"
+    echo "" >&2
+    echo -e "${COLOR_YELLOW}⚠️  Rollback Command (if needed)${COLOR_RESET}" >&2
+    echo "  ${SCRIPT_DIR}/rollback.sh ${backup_file}" >&2
 }
 
 # ============================================
@@ -232,7 +232,10 @@ run_preflight_checks() {
 
     check_root || exit_with_error 4 "Root privileges required"
     check_disk_space 100 || exit_with_error 1 "Insufficient disk space"
-    check_dependencies || exit_with_error 1 "Missing required dependencies"
+
+    # Auto-install dependencies if needed
+    install_dependencies_if_needed || exit_with_error 1 "Failed to install dependencies"
+
     check_x_ui_service || exit_with_error 2 "x-ui service not available"
 
     local config_path=$(check_x_ui_config)
