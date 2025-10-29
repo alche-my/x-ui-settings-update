@@ -1,0 +1,27 @@
+{
+  "api": {
+    "panel_url": "http://localhost:2053",
+    "username": "admin",
+    "password": "your_password_here"
+  },
+  "servers": [
+    {
+      "name": "Finland-Helsinki-1",
+      "ip": "95.217.123.45",
+      "port": 443,
+      "local_port": 443
+    },
+    {
+      "name": "Finland-Amsterdam-1",
+      "ip": "95.217.123.46",
+      "port": 443,
+      "local_port": 8443
+    },
+    {
+      "name": "Finland-Frankfurt-1",
+      "ip": "95.217.123.47",
+      "port": 443,
+      "local_port": 2053
+    }
+  ]
+}
