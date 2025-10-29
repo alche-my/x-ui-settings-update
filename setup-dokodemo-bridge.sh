@@ -456,33 +456,48 @@ create_dokodemo_inbound() {
 
     print_info "Создание inbound: Dokodemo -> $name"
 
-    # Prepare JSON payload
+    # Prepare settings as JSON string (3x-ui API requirement)
+    local settings_json=$(jq -n \
+        --arg address "$remote_ip" \
+        --argjson port "$remote_port" \
+        '{
+            address: $address,
+            port: $port,
+            network: "tcp,udp"
+        }' | jq -c .)
+
+    # Prepare streamSettings as JSON string (3x-ui API requirement)
+    local stream_settings_json=$(jq -n \
+        '{
+            network: "tcp",
+            security: "none"
+        }' | jq -c .)
+
+    # Prepare sniffing as JSON string (3x-ui API requirement)
+    local sniffing_json=$(jq -n \
+        '{
+            enabled: true,
+            destOverride: ["http", "tls"]
+        }' | jq -c .)
+
+    # Prepare final JSON payload with stringified fields
     local json_payload=$(jq -n \
         --arg remark "Dokodemo -> $name" \
         --arg listen "0.0.0.0" \
         --argjson port "$local_port" \
         --arg protocol "dokodemo-door" \
-        --arg address "$remote_ip" \
-        --argjson remote_port "$remote_port" \
+        --arg settings "$settings_json" \
+        --arg streamSettings "$stream_settings_json" \
+        --arg sniffing "$sniffing_json" \
         '{
             enable: true,
             remark: $remark,
             listen: $listen,
             port: $port,
             protocol: $protocol,
-            settings: {
-                address: $address,
-                port: $remote_port,
-                network: "tcp,udp"
-            },
-            streamSettings: {
-                network: "tcp",
-                security: "none"
-            },
-            sniffing: {
-                enabled: true,
-                destOverride: ["http", "tls"]
-            }
+            settings: $settings,
+            streamSettings: $streamSettings,
+            sniffing: $sniffing
         }')
 
     # Make API request
