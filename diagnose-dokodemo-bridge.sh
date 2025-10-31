@@ -40,17 +40,17 @@ declare -a RECOMMENDATIONS=()
 
 print_success() {
     echo -e "${GREEN}✓${NC} $1"
-    ((PASS_COUNT++))
+    PASS_COUNT=$((PASS_COUNT + 1))
 }
 
 print_error() {
     echo -e "${RED}✗${NC} $1"
-    ((FAIL_COUNT++))
+    FAIL_COUNT=$((FAIL_COUNT + 1))
 }
 
 print_warning() {
     echo -e "${YELLOW}⚠${NC} $1"
-    ((WARN_COUNT++))
+    WARN_COUNT=$((WARN_COUNT + 1))
 }
 
 print_info() {
@@ -532,7 +532,7 @@ print_summary() {
         local idx=1
         for rec in "${RECOMMENDATIONS[@]}"; do
             echo -e "${CYAN}  $idx.${NC} $rec"
-            ((idx++))
+            idx=$((idx + 1))
         done
     fi
 
