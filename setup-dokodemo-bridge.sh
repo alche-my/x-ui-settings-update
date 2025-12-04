@@ -457,6 +457,7 @@ create_dokodemo_inbound() {
     print_info "Создание inbound: Dokodemo -> $name"
 
     # Prepare JSON payload
+    # Note: settings must be a JSON string, not an object
     local json_payload=$(jq -n \
         --arg remark "Dokodemo -> $name" \
         --arg listen "0.0.0.0" \
@@ -470,11 +471,11 @@ create_dokodemo_inbound() {
             listen: $listen,
             port: $port,
             protocol: $protocol,
-            settings: {
+            settings: ({
                 address: $address,
                 port: $remote_port,
                 network: "tcp,udp"
-            },
+            } | tojson),
             streamSettings: {
                 network: "tcp",
                 security: "none"
