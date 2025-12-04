@@ -9,16 +9,27 @@
 **Запустите одной командой на вашем российском VPS:**
 
 ```bash
-bash <(curl -Ls https://raw.githubusercontent.com/alche-my/x-ui-settings-update/claude/dokodemo-bridge-setup-script-011CUbPMnjnzUTsLiZV9wDhf/setup-dokodemo-bridge.sh)
+bash <(curl -Ls https://raw.githubusercontent.com/alche-my/x-ui-settings-update/main/setup-dokodemo-bridge.sh)
 ```
 
 Скрипт автоматически:
-- Установит все необходимые зависимости (curl, jq)
+- Установит все необходимые зависимости (curl, jq, sqlite3)
 - Установит 3x-ui, если его нет
+- Настроит DNS напрямую в базе данных x-ui
 - Проведет вас через интерактивную настройку
 - Создаст Dokodemo-door туннели к вашим финским серверам
 
 **Никаких предварительных установок не требуется!** ✨
+
+### 🔍 Диагностика проблем
+
+Если возникли проблемы, запустите диагностический скрипт:
+
+```bash
+bash <(curl -Ls https://raw.githubusercontent.com/alche-my/x-ui-settings-update/main/diagnose-dokodemo-bridge.sh)
+```
+
+Он автоматически проверит все аспекты работы моста и предоставит детальный отчёт.
 
 ---
 
@@ -66,7 +77,7 @@ bash <(curl -Ls https://raw.githubusercontent.com/alche-my/x-ui-settings-update/
 Запустите скрипт напрямую без клонирования репозитория:
 
 ```bash
-bash <(curl -Ls https://raw.githubusercontent.com/alche-my/x-ui-settings-update/claude/dokodemo-bridge-setup-script-011CUbPMnjnzUTsLiZV9wDhf/setup-dokodemo-bridge.sh)
+bash <(curl -Ls https://raw.githubusercontent.com/alche-my/x-ui-settings-update/main/setup-dokodemo-bridge.sh)
 ```
 
 **Это всё!** Скрипт автоматически установит все зависимости и запустится в интерактивном режиме.
@@ -77,7 +88,7 @@ bash <(curl -Ls https://raw.githubusercontent.com/alche-my/x-ui-settings-update/
 
 ```bash
 # Скачать скрипт
-wget https://raw.githubusercontent.com/alche-my/x-ui-settings-update/claude/dokodemo-bridge-setup-script-011CUbPMnjnzUTsLiZV9wDhf/setup-dokodemo-bridge.sh
+wget https://raw.githubusercontent.com/alche-my/x-ui-settings-update/main/setup-dokodemo-bridge.sh
 
 # Запустить
 bash setup-dokodemo-bridge.sh
@@ -98,7 +109,7 @@ bash setup-dokodemo-bridge.sh
 Запустите одной командой:
 
 ```bash
-bash <(curl -Ls https://raw.githubusercontent.com/alche-my/x-ui-settings-update/claude/dokodemo-bridge-setup-script-011CUbPMnjnzUTsLiZV9wDhf/setup-dokodemo-bridge.sh)
+bash <(curl -Ls https://raw.githubusercontent.com/alche-my/x-ui-settings-update/main/setup-dokodemo-bridge.sh)
 ```
 
 Или если скрипт уже скачан:
@@ -127,7 +138,7 @@ bash setup-dokodemo-bridge.sh
 ```bash
 # Сначала создайте config.json (см. пример ниже)
 # Затем запустите:
-bash <(curl -Ls https://raw.githubusercontent.com/alche-my/x-ui-settings-update/claude/dokodemo-bridge-setup-script-011CUbPMnjnzUTsLiZV9wDhf/setup-dokodemo-bridge.sh) --config config.json
+bash <(curl -Ls https://raw.githubusercontent.com/alche-my/x-ui-settings-update/main/setup-dokodemo-bridge.sh) --config config.json
 ```
 
 Или если скрипт уже скачан:

@@ -209,7 +209,7 @@ journalctl -u x-ui -n 100
 Запустите диагностический скрипт для полной проверки:
 
 ```bash
-bash <(curl -Ls https://raw.githubusercontent.com/alche-my/x-ui-settings-update/claude/dokodemo-bridge-setup-script-011CUbPMnjnzUTsLiZV9wDhf/diagnose-dokodemo-bridge.sh)
+bash <(curl -Ls https://raw.githubusercontent.com/alche-my/x-ui-settings-update/main/diagnose-dokodemo-bridge.sh)
 ```
 
 ---
@@ -219,7 +219,7 @@ bash <(curl -Ls https://raw.githubusercontent.com/alche-my/x-ui-settings-update/
 1. **Соберите информацию:**
    ```bash
    # Запустите диагностику и сохраните вывод
-   bash <(curl -Ls https://raw.githubusercontent.com/alche-my/x-ui-settings-update/claude/dokodemo-bridge-setup-script-011CUbPMnjnzUTsLiZV9wDhf/diagnose-dokodemo-bridge.sh) > diagnostic-report.txt
+   bash <(curl -Ls https://raw.githubusercontent.com/alche-my/x-ui-settings-update/main/diagnose-dokodemo-bridge.sh) > diagnostic-report.txt
 
    # Соберите логи
    journalctl -u x-ui -n 200 > xui-logs.txt

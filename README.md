@@ -378,7 +378,7 @@ apt-get update && apt-get install -y jq curl dnsutils netcat-openbsd
 **Запустите на вашем российском VPS:**
 
 ```bash
-bash <(curl -Ls https://raw.githubusercontent.com/alche-my/x-ui-settings-update/claude/dokodemo-bridge-setup-script-011CUbPMnjnzUTsLiZV9wDhf/setup-dokodemo-bridge.sh)
+bash <(curl -Ls https://raw.githubusercontent.com/alche-my/x-ui-settings-update/main/setup-dokodemo-bridge.sh)
 ```
 
 Скрипт автоматически:
@@ -399,7 +399,7 @@ bash <(curl -Ls https://raw.githubusercontent.com/alche-my/x-ui-settings-update/
 Если мост не работает, запустите диагностический скрипт:
 
 ```bash
-bash <(curl -Ls https://raw.githubusercontent.com/alche-my/x-ui-settings-update/claude/dokodemo-bridge-setup-script-011CUbPMnjnzUTsLiZV9wDhf/diagnose-dokodemo-bridge.sh)
+bash <(curl -Ls https://raw.githubusercontent.com/alche-my/x-ui-settings-update/main/diagnose-dokodemo-bridge.sh)
 ```
 
 Он проверит:
