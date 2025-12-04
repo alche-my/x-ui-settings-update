@@ -2,12 +2,14 @@
 
 Автоматический скрипт для настройки российского VPS в качестве "моста" (bridge) для обхода блокировок с использованием протокола Dokodemo-door в 3x-ui.
 
+> **⚠️ Важное обновление (04.12.2025):** Исправлена критическая ошибка JSON сериализации при создании inbound'ов. Используйте актуальную версию скрипта из ветки `claude/dokodemo-bridge-setup-script-011CUbPMnjnzUTsLiZV9wDhf`.
+
 ## 🚀 Быстрый старт
 
 **Запустите одной командой на вашем российском VPS:**
 
 ```bash
-bash <(curl -Ls https://raw.githubusercontent.com/alche-my/x-ui-settings-update/main/setup-dokodemo-bridge.sh)
+bash <(curl -Ls https://raw.githubusercontent.com/alche-my/x-ui-settings-update/claude/dokodemo-bridge-setup-script-011CUbPMnjnzUTsLiZV9wDhf/setup-dokodemo-bridge.sh)
 ```
 
 Скрипт автоматически:
@@ -64,7 +66,7 @@ bash <(curl -Ls https://raw.githubusercontent.com/alche-my/x-ui-settings-update/
 Запустите скрипт напрямую без клонирования репозитория:
 
 ```bash
-bash <(curl -Ls https://raw.githubusercontent.com/alche-my/x-ui-settings-update/main/setup-dokodemo-bridge.sh)
+bash <(curl -Ls https://raw.githubusercontent.com/alche-my/x-ui-settings-update/claude/dokodemo-bridge-setup-script-011CUbPMnjnzUTsLiZV9wDhf/setup-dokodemo-bridge.sh)
 ```
 
 **Это всё!** Скрипт автоматически установит все зависимости и запустится в интерактивном режиме.
@@ -75,7 +77,7 @@ bash <(curl -Ls https://raw.githubusercontent.com/alche-my/x-ui-settings-update/
 
 ```bash
 # Скачать скрипт
-wget https://raw.githubusercontent.com/alche-my/x-ui-settings-update/main/setup-dokodemo-bridge.sh
+wget https://raw.githubusercontent.com/alche-my/x-ui-settings-update/claude/dokodemo-bridge-setup-script-011CUbPMnjnzUTsLiZV9wDhf/setup-dokodemo-bridge.sh
 
 # Запустить
 bash setup-dokodemo-bridge.sh
@@ -96,7 +98,7 @@ bash setup-dokodemo-bridge.sh
 Запустите одной командой:
 
 ```bash
-bash <(curl -Ls https://raw.githubusercontent.com/alche-my/x-ui-settings-update/main/setup-dokodemo-bridge.sh)
+bash <(curl -Ls https://raw.githubusercontent.com/alche-my/x-ui-settings-update/claude/dokodemo-bridge-setup-script-011CUbPMnjnzUTsLiZV9wDhf/setup-dokodemo-bridge.sh)
 ```
 
 Или если скрипт уже скачан:
@@ -125,7 +127,7 @@ bash setup-dokodemo-bridge.sh
 ```bash
 # Сначала создайте config.json (см. пример ниже)
 # Затем запустите:
-bash <(curl -Ls https://raw.githubusercontent.com/alche-my/x-ui-settings-update/main/setup-dokodemo-bridge.sh) --config config.json
+bash <(curl -Ls https://raw.githubusercontent.com/alche-my/x-ui-settings-update/claude/dokodemo-bridge-setup-script-011CUbPMnjnzUTsLiZV9wDhf/setup-dokodemo-bridge.sh) --config config.json
 ```
 
 Или если скрипт уже скачан:
@@ -380,21 +382,13 @@ Dokodemo-door (どこでもドア, "Дверь в любое место") - эт
   "listen": "0.0.0.0",
   "port": 443,
   "protocol": "dokodemo-door",
-  "settings": {
-    "address": "95.217.123.45",
-    "port": 443,
-    "network": "tcp,udp"
-  },
-  "streamSettings": {
-    "network": "tcp",
-    "security": "none"
-  },
-  "sniffing": {
-    "enabled": true,
-    "destOverride": ["http", "tls"]
-  }
+  "settings": "{\"address\":\"95.217.123.45\",\"port\":443,\"network\":\"tcp,udp\"}",
+  "streamSettings": "{\"network\":\"tcp\",\"security\":\"none\"}",
+  "sniffing": "{\"enabled\":true,\"destOverride\":[\"http\",\"tls\"]}"
 }
 ```
+
+> **Примечание:** Поля `settings`, `streamSettings` и `sniffing` должны быть JSON-строками, а не объектами. Это требование API 3x-ui.
 
 ### API Endpoints
 
@@ -437,6 +431,14 @@ A: Да, убедитесь, что порты прослушивания отк
 MIT License - свободно используйте, модифицируйте и распространяйте.
 
 ## Changelog
+
+### Version 1.1.0 (2025-12-04)
+- **🔧 Исправлена критическая ошибка:** JSON сериализация для API 3x-ui
+  - Поля `settings`, `streamSettings`, `sniffing` теперь правильно сериализуются как JSON-строки
+  - Исправлена ошибка: "json: cannot unmarshal object into Go struct field Inbound.settings of type string"
+- **✨ Добавлена автоматическая настройка DNS** для корректной работы Xray
+- **✨ Добавлен диагностический скрипт** `diagnose-dokodemo-bridge.sh`
+- **📚 Обновлена документация** с актуальными ссылками
 
 ### Version 1.0.0 (2025-10-29)
 - Первый релиз
