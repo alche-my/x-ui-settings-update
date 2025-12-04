@@ -276,14 +276,34 @@ select_dokodemo_inbound() {
     local inbounds_response
     inbounds_response=$(get_inbounds_list) || die "Не удалось получить список инбаундов"
 
+    # Try to extract JSON from response (in case there's extra text)
+    local json_response=$(echo "$inbounds_response" | grep -o '{.*}' | head -1)
+
+    # If grep didn't find JSON, try the original response
+    if [[ -z "$json_response" ]]; then
+        json_response="$inbounds_response"
+    fi
+
     # Check if response is valid JSON
-    if ! echo "$inbounds_response" | jq empty 2>/dev/null; then
-        die "Неверный формат ответа от API"
+    if ! echo "$json_response" | jq empty 2>/dev/null; then
+        print_error "Неверный формат ответа от API"
+        print_info "Ответ сервера (первые 500 символов):"
+        echo "$inbounds_response" | head -c 500
+        echo
+        die "Не удалось распарсить ответ API"
     fi
 
     # Extract Dokodemo-door inbounds
-    local dokodemo_inbounds=$(echo "$inbounds_response" | jq -c '[.obj[] | select(.protocol == "dokodemo-door")]')
-    local count=$(echo "$dokodemo_inbounds" | jq 'length')
+    local dokodemo_inbounds=$(echo "$json_response" | jq -c '[.obj[]? // .[] | select(.protocol == "dokodemo-door")]' 2>/dev/null)
+
+    if [[ -z "$dokodemo_inbounds" ]] || [[ "$dokodemo_inbounds" == "null" ]]; then
+        print_error "Не удалось извлечь инбаунды из ответа"
+        print_info "JSON ответ:"
+        echo "$json_response" | jq '.' 2>/dev/null || echo "$json_response"
+        die "Dokodemo-door инбаунды не найдены"
+    fi
+
+    local count=$(echo "$dokodemo_inbounds" | jq 'length' 2>/dev/null || echo "0")
 
     if [[ $count -eq 0 ]]; then
         die "Dokodemo-door инбаунды не найдены"
@@ -296,13 +316,23 @@ select_dokodemo_inbound() {
     echo -e "${BOLD}Доступные Dokodemo-door инбаунды:${NC}\n"
 
     for ((i=0; i<count; i++)); do
-        local inbound=$(echo "$dokodemo_inbounds" | jq -r ".[$i]")
-        local id=$(echo "$inbound" | jq -r '.id')
-        local remark=$(echo "$inbound" | jq -r '.remark')
-        local port=$(echo "$inbound" | jq -r '.port')
-        local settings=$(echo "$inbound" | jq -r '.settings')
-        local address=$(echo "$settings" | jq -r '.address // "N/A"')
-        local remote_port=$(echo "$settings" | jq -r '.port // "N/A"')
+        local inbound=$(echo "$dokodemo_inbounds" | jq -c ".[$i]" 2>/dev/null)
+        local id=$(echo "$inbound" | jq -r '.id // "N/A"' 2>/dev/null)
+        local remark=$(echo "$inbound" | jq -r '.remark // "N/A"' 2>/dev/null)
+        local port=$(echo "$inbound" | jq -r '.port // "N/A"' 2>/dev/null)
+
+        # Parse settings - it might be a string or object
+        local settings=$(echo "$inbound" | jq -r '.settings // "{}"' 2>/dev/null)
+
+        # Try to parse settings if it's a JSON string
+        if [[ "$settings" == "{"* ]]; then
+            local address=$(echo "$settings" | jq -r '.address // "N/A"' 2>/dev/null)
+            local remote_port=$(echo "$settings" | jq -r '.port // "N/A"' 2>/dev/null)
+        else
+            # Settings might be a JSON string that needs parsing
+            local address=$(echo "$settings" | jq -r 'fromjson? | .address // "N/A"' 2>/dev/null || echo "N/A")
+            local remote_port=$(echo "$settings" | jq -r 'fromjson? | .port // "N/A"' 2>/dev/null || echo "N/A")
+        fi
 
         echo -e "${CYAN}[$((i+1))]${NC} ${BOLD}$remark${NC}"
         echo -e "    ID: $id"
@@ -331,16 +361,39 @@ select_dokodemo_inbound() {
 update_inbound_ip() {
     local inbound_json=$1
 
-    local id=$(echo "$inbound_json" | jq -r '.id')
-    local remark=$(echo "$inbound_json" | jq -r '.remark')
-    local current_settings=$(echo "$inbound_json" | jq -r '.settings')
-    local current_address=$(echo "$current_settings" | jq -r '.address')
+    local id=$(echo "$inbound_json" | jq -r '.id // "N/A"' 2>/dev/null)
+    local remark=$(echo "$inbound_json" | jq -r '.remark // "N/A"' 2>/dev/null)
+
+    # Get settings - might be a string or object
+    local current_settings=$(echo "$inbound_json" | jq -r '.settings // "{}"' 2>/dev/null)
+
+    # Parse settings if it's a JSON string
+    local current_address
+    if [[ "$current_settings" == "{"* ]]; then
+        current_address=$(echo "$current_settings" | jq -r '.address // "N/A"' 2>/dev/null)
+    else
+        # Try to parse as JSON string
+        current_address=$(echo "$current_settings" | jq -r 'fromjson? | .address // "N/A"' 2>/dev/null)
+        if [[ "$current_address" == "N/A" ]] || [[ -z "$current_address" ]]; then
+            # If still N/A, try without fromjson
+            current_address=$(echo "$inbound_json" | jq -r '.settings.address // "N/A"' 2>/dev/null)
+        fi
+    fi
 
     print_header "Обновление IP-адреса"
 
     echo -e "${BOLD}Выбран инбаунд:${NC} $remark"
+    echo -e "${BOLD}ID:${NC} $id"
     echo -e "${BOLD}Текущий IP:${NC} ${RED}$current_address${NC}"
     echo
+
+    # Validate that we have a current address
+    if [[ "$current_address" == "N/A" ]] || [[ -z "$current_address" ]] || [[ "$current_address" == "null" ]]; then
+        print_error "Не удалось определить текущий IP-адрес"
+        print_info "JSON инбаунда:"
+        echo "$inbound_json" | jq '.' 2>/dev/null || echo "$inbound_json"
+        return 1
+    fi
 
     # Get new IP
     local new_ip
@@ -368,9 +421,19 @@ update_inbound_ip() {
         return 1
     fi
 
+    # Parse current settings properly
+    local settings_obj
+    if [[ "$current_settings" == "{"* ]]; then
+        settings_obj="$current_settings"
+    else
+        settings_obj=$(echo "$current_settings" | jq -r 'fromjson? // .' 2>/dev/null)
+    fi
+
     # Update settings JSON
-    local updated_settings=$(echo "$current_settings" | jq --arg new_addr "$new_ip" '.address = $new_addr')
-    local updated_inbound=$(echo "$inbound_json" | jq --argjson settings "$updated_settings" '.settings = $settings')
+    local updated_settings=$(echo "$settings_obj" | jq --arg new_addr "$new_ip" '.address = $new_addr' 2>/dev/null)
+
+    # Create updated inbound - settings might need to be stringified
+    local updated_inbound=$(echo "$inbound_json" | jq --arg settings_str "$updated_settings" '.settings = $settings_str' 2>/dev/null)
 
     # Update via API
     if update_inbound "$id" "$updated_inbound"; then
