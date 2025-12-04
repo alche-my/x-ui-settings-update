@@ -297,13 +297,13 @@ get_server_count() {
     local count
 
     while true; do
-        read -p "Сколько финских серверов нужно настроить? (1-20): " count
+        read -p "Сколько финских серверов нужно настроить? (0-20, 0 = пропустить): " count
 
-        if [[ $count =~ ^[0-9]+$ ]] && [[ $count -ge 1 ]] && [[ $count -le 20 ]]; then
+        if [[ $count =~ ^[0-9]+$ ]] && [[ $count -ge 0 ]] && [[ $count -le 20 ]]; then
             echo "$count"
             return 0
         else
-            print_error "Введите число от 1 до 20"
+            print_error "Введите число от 0 до 20"
         fi
     done
 }
@@ -408,10 +408,15 @@ collect_configuration() {
     # Get number of servers
     local server_count=$(get_server_count)
 
-    # Get configuration for each server
-    for ((i=1; i<=server_count; i++)); do
-        get_server_config "$i"
-    done
+    # If 0 servers, skip server configuration
+    if [[ $server_count -eq 0 ]]; then
+        print_info "Пропуск настройки инбаундов (выбрано 0 серверов)"
+    else
+        # Get configuration for each server
+        for ((i=1; i<=server_count; i++)); do
+            get_server_config "$i"
+        done
+    fi
 
     # Get API credentials
     get_api_credentials
@@ -547,14 +552,20 @@ create_dokodemo_inbound() {
 create_all_inbounds() {
     print_header "Создание Dokodemo-door inbound'ов"
 
+    # Check if there are any servers to configure
+    local total=${#SERVER_NAMES[@]}
+
+    if [[ $total -eq 0 ]]; then
+        print_info "Нет серверов для настройки, пропуск создания инбаундов"
+        return 0
+    fi
+
     # Login first
     if ! api_login; then
         die "Не удалось аутентифицироваться в 3x-ui API"
     fi
 
     # Create each inbound
-    local total=${#SERVER_NAMES[@]}
-
     for ((i=0; i<total; i++)); do
         echo
         print_info "Обработка сервера $((i+1))/$total..."
@@ -713,40 +724,49 @@ print_summary() {
 
     print_header "Настройка завершена"
 
-    echo -e "${BOLD}Создано инбаундов: $success_count из $total${NC}\n"
+    if [[ $total -eq 0 ]]; then
+        echo -e "${BOLD}Инбаунды не настраивались (выбрано 0 серверов)${NC}\n"
+    else
+        echo -e "${BOLD}Создано инбаундов: $success_count из $total${NC}\n"
 
-    # Print each server status
-    for ((i=0; i<total; i++)); do
-        local status_icon="✗"
-        local status_color=$RED
-        local status_text="Ошибка при создании"
+        # Print each server status
+        for ((i=0; i<total; i++)); do
+            local status_icon="✗"
+            local status_color=$RED
+            local status_text="Ошибка при создании"
 
-        if [[ "${INBOUND_STATUS[$i]}" == "success" ]]; then
-            status_icon="✓"
-            status_color=$GREEN
-            status_text="Успешно создан"
-        fi
+            if [[ "${INBOUND_STATUS[$i]}" == "success" ]]; then
+                status_icon="✓"
+                status_color=$GREEN
+                status_text="Успешно создан"
+            fi
 
-        echo -e "${BOLD}Сервер #$((i+1)): ${SERVER_NAMES[$i]}${NC}"
-        echo -e "  - Локальный порт: ${CYAN}${LOCAL_PORTS[$i]}${NC}"
-        echo -e "  - Перенаправление: ${CYAN}${SERVER_IPS[$i]}:${SERVER_PORTS[$i]}${NC}"
-        echo -e "  - Статус: ${status_color}${status_icon} ${status_text}${NC}"
-        echo
-    done
+            echo -e "${BOLD}Сервер #$((i+1)): ${SERVER_NAMES[$i]}${NC}"
+            echo -e "  - Локальный порт: ${CYAN}${LOCAL_PORTS[$i]}${NC}"
+            echo -e "  - Перенаправление: ${CYAN}${SERVER_IPS[$i]}:${SERVER_PORTS[$i]}${NC}"
+            echo -e "  - Статус: ${status_color}${status_icon} ${status_text}${NC}"
+            echo
+        done
+    fi
 
     # Print bridge IP info
     print_header "IP этого моста"
     echo -e "${BOLD}Внешний IP:${NC} ${GREEN}$external_ip${NC}\n"
 
-    echo -e "${BOLD}Для обновления клиентских конфигов замените:${NC}"
-    echo -e "  - Старый IP финского сервера → ${GREEN}$external_ip${NC}"
-    echo -e "  - Старый порт → соответствующий порт из таблицы выше\n"
+    if [[ $total -gt 0 ]]; then
+        echo -e "${BOLD}Для обновления клиентских конфигов замените:${NC}"
+        echo -e "  - Старый IP финского сервера → ${GREEN}$external_ip${NC}"
+        echo -e "  - Старый порт → соответствующий порт из таблицы выше\n"
+    fi
 
     # Extract port from PANEL_URL for display
     local panel_port=$(echo "$PANEL_URL" | grep -oP ':\K[0-9]+' || echo "2053")
     echo -e "${BOLD}Панель управления 3x-ui:${NC} ${BLUE}http://$external_ip:$panel_port${NC}\n"
 
-    if [[ $success_count -lt $total ]]; then
+    if [[ $total -eq 0 ]]; then
+        print_success "Настройка DNS и 3x-ui выполнена!"
+        return 0
+    elif [[ $success_count -lt $total ]]; then
         print_warning "Некоторые inbound'ы не были созданы. Проверьте ошибки выше."
         return 1
     else
