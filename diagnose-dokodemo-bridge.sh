@@ -446,7 +446,12 @@ check_xui_logs() {
 
     # Check for recent errors
     local error_count=$(journalctl -u x-ui --since "10 minutes ago" 2>/dev/null | \
-        grep -c "ERROR" || echo "0")
+        grep -c "ERROR" 2>/dev/null || true)
+
+    # Ensure error_count is a valid number
+    error_count=${error_count:-0}
+    error_count=$(echo "$error_count" | tr -d '\n' | grep -o '[0-9]*' | head -1)
+    error_count=${error_count:-0}
 
     if [[ $error_count -eq 0 ]]; then
         print_success "Ошибок в логах за последние 10 минут не найдено"
@@ -466,7 +471,12 @@ check_xui_logs() {
 
     # Check if Xray is restarting
     local restart_count=$(journalctl -u x-ui --since "10 minutes ago" 2>/dev/null | \
-        grep -c "started" || echo "0")
+        grep -c "started" 2>/dev/null || true)
+
+    # Ensure restart_count is a valid number
+    restart_count=${restart_count:-0}
+    restart_count=$(echo "$restart_count" | tr -d '\n' | grep -o '[0-9]*' | head -1)
+    restart_count=${restart_count:-0}
 
     if [[ $restart_count -gt 3 ]]; then
         print_warning "Xray перезапускался $restart_count раз за последние 10 минут"
