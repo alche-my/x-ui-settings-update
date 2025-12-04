@@ -148,40 +148,63 @@ get_api_credentials() {
 api_login() {
     print_info "Аутентификация в 3x-ui API..."
 
-    local login_url="${PANEL_URL}/login"
-    print_info "URL запроса: $login_url"
+    # Try different possible login endpoints
+    local login_endpoints=("login" "panel/login" "api/login")
+    local success=false
 
-    local response
-    local http_code
+    for endpoint in "${login_endpoints[@]}"; do
+        local login_url="${PANEL_URL}/${endpoint}"
+        print_info "Попытка входа через: $login_url"
 
-    response=$(curl -s -w "\n%{http_code}" -X POST "$login_url" \
-        -H "Content-Type: application/json" \
-        -d "{\"username\":\"${API_USERNAME}\",\"password\":\"${API_PASSWORD}\"}" \
-        -c /tmp/xui-cookie.txt)
+        local response
+        local http_code
 
-    http_code=$(echo "$response" | tail -1)
-    local body=$(echo "$response" | head -n -1)
+        response=$(curl -s -w "\n%{http_code}" -X POST "$login_url" \
+            -H "Content-Type: application/json" \
+            -d "{\"username\":\"${API_USERNAME}\",\"password\":\"${API_PASSWORD}\"}" \
+            -c /tmp/xui-cookie.txt 2>&1)
 
-    if [[ "$http_code" -eq 200 ]]; then
-        # Extract session cookie
-        if [[ -f /tmp/xui-cookie.txt ]]; then
-            SESSION_COOKIE=$(grep -oP '(?<=3x-ui\s)[^\s]+' /tmp/xui-cookie.txt || echo "")
+        http_code=$(echo "$response" | tail -1)
+        local body=$(echo "$response" | head -n -1)
 
-            if [[ -n "$SESSION_COOKIE" ]]; then
-                print_success "Успешная аутентификация"
-                return 0
+        print_info "HTTP код ответа: $http_code"
+
+        if [[ "$http_code" -eq 200 ]]; then
+            # Extract session cookie
+            if [[ -f /tmp/xui-cookie.txt ]]; then
+                SESSION_COOKIE=$(grep -oP '(?<=3x-ui\s)[^\s]+' /tmp/xui-cookie.txt 2>/dev/null || echo "")
+
+                if [[ -n "$SESSION_COOKIE" ]]; then
+                    print_success "Успешная аутентификация через: $endpoint"
+                    success=true
+                    break
+                fi
+            fi
+
+            # Check if response contains success indicator
+            if echo "$body" | jq -e '.success == true' >/dev/null 2>&1; then
+                print_success "Успешная аутентификация (по ответу API)"
+                success=true
+                break
             fi
         fi
 
-        print_error "Не удалось получить сессию"
-        print_info "Ответ сервера: $body"
-        return 1
-    else
-        print_error "Ошибка аутентификации (HTTP $http_code)"
-        print_error "Проверьте URL, логин и пароль"
-        if [[ -n "$body" ]]; then
-            print_info "Ответ сервера: $body"
+        if [[ "$http_code" != "404" ]]; then
+            print_warning "Endpoint $endpoint вернул код $http_code"
+            if [[ -n "$body" ]] && [[ ${#body} -lt 200 ]]; then
+                print_info "Ответ: $body"
+            fi
         fi
+    done
+
+    if [[ "$success" == "true" ]]; then
+        return 0
+    else
+        print_error "Не удалось аутентифицироваться"
+        print_error "Проверьте:"
+        print_error "  1. Правильность URL панели (включая секретный путь)"
+        print_error "  2. Логин и пароль"
+        print_error "  3. Доступность панели: curl ${PANEL_URL}"
         return 1
     fi
 }
