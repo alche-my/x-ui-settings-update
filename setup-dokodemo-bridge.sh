@@ -456,34 +456,48 @@ create_dokodemo_inbound() {
 
     print_info "Создание inbound: Dokodemo -> $name"
 
-    # Prepare JSON payload
-    # Note: settings must be a JSON string, not an object
+    # Prepare settings as JSON string (3x-ui API requirement)
+    local settings_json=$(jq -n \
+        --arg address "$remote_ip" \
+        --argjson port "$remote_port" \
+        '{
+            address: $address,
+            port: $port,
+            network: "tcp,udp"
+        }' | jq -c .)
+
+    # Prepare streamSettings as JSON string (3x-ui API requirement)
+    local stream_settings_json=$(jq -n \
+        '{
+            network: "tcp",
+            security: "none"
+        }' | jq -c .)
+
+    # Prepare sniffing as JSON string (3x-ui API requirement)
+    local sniffing_json=$(jq -n \
+        '{
+            enabled: true,
+            destOverride: ["http", "tls"]
+        }' | jq -c .)
+
+    # Prepare final JSON payload with stringified fields
     local json_payload=$(jq -n \
         --arg remark "Dokodemo -> $name" \
         --arg listen "0.0.0.0" \
         --argjson port "$local_port" \
         --arg protocol "dokodemo-door" \
-        --arg address "$remote_ip" \
-        --argjson remote_port "$remote_port" \
+        --arg settings "$settings_json" \
+        --arg streamSettings "$stream_settings_json" \
+        --arg sniffing "$sniffing_json" \
         '{
             enable: true,
             remark: $remark,
             listen: $listen,
             port: $port,
             protocol: $protocol,
-            settings: ({
-                address: $address,
-                port: $remote_port,
-                network: "tcp,udp"
-            } | tojson),
-            streamSettings: {
-                network: "tcp",
-                security: "none"
-            },
-            sniffing: {
-                enabled: true,
-                destOverride: ["http", "tls"]
-            }
+            settings: $settings,
+            streamSettings: $streamSettings,
+            sniffing: $sniffing
         }')
 
     # Make API request
@@ -551,6 +565,113 @@ create_all_inbounds() {
 
     # Cleanup cookie file
     rm -f /tmp/xui-cookie.txt
+}
+
+# Configure DNS in Xray config
+configure_dns() {
+    print_header "Настройка DNS для Xray"
+
+    local config_file="/usr/local/x-ui/bin/config.json"
+
+    # Check if config file exists
+    if [[ ! -f "$config_file" ]]; then
+        print_warning "Файл конфигурации не найден: $config_file"
+        return 1
+    fi
+
+    # Check if DNS is already configured
+    local current_dns=$(jq -r '.dns' "$config_file" 2>/dev/null)
+
+    if [[ "$current_dns" != "null" ]] && [[ -n "$current_dns" ]]; then
+        # Check if DNS has servers
+        local dns_servers=$(jq -r '.dns.servers[]?' "$config_file" 2>/dev/null)
+        if [[ -n "$dns_servers" ]]; then
+            print_success "DNS уже настроен"
+            return 0
+        fi
+    fi
+
+    print_info "Добавление DNS конфигурации..."
+
+    # Create backup
+    local backup_file="${config_file}.backup-$(date +%s)"
+    cp "$config_file" "$backup_file"
+    print_info "Создан бэкап: $backup_file"
+
+    # Stop x-ui to safely modify config
+    print_info "Остановка x-ui..."
+    systemctl stop x-ui
+    sleep 2
+
+    # Add DNS configuration
+    jq '.dns = {
+        "servers": [
+            "1.1.1.1",
+            "8.8.8.8",
+            "https://dns.google/dns-query"
+        ],
+        "queryStrategy": "UseIP",
+        "tag": "dns_inbound"
+    }' "$config_file" > /tmp/xui-config-new.json
+
+    # Check if jq succeeded
+    if [[ $? -ne 0 ]]; then
+        print_error "Ошибка при обработке JSON"
+        systemctl start x-ui
+        return 1
+    fi
+
+    # Validate new config
+    if ! jq empty /tmp/xui-config-new.json 2>/dev/null; then
+        print_error "Новая конфигурация содержит ошибки JSON"
+        systemctl start x-ui
+        rm -f /tmp/xui-config-new.json
+        return 1
+    fi
+
+    # Replace config
+    mv /tmp/xui-config-new.json "$config_file"
+
+    # Verify DNS was added
+    local new_dns=$(jq -r '.dns.servers[0]' "$config_file" 2>/dev/null)
+    if [[ "$new_dns" == "1.1.1.1" ]]; then
+        print_success "DNS конфигурация добавлена"
+    else
+        print_error "DNS не был добавлен корректно"
+        # Restore backup
+        cp "$backup_file" "$config_file"
+        systemctl start x-ui
+        return 1
+    fi
+
+    # Start x-ui
+    print_info "Запуск x-ui..."
+    systemctl start x-ui
+
+    # Wait for service to start
+    sleep 3
+
+    # Check if service started successfully
+    if systemctl is-active --quiet x-ui; then
+        print_success "x-ui успешно запущен с новой конфигурацией"
+
+        # Verify DNS persisted
+        local final_dns=$(jq -r '.dns.servers[0]' "$config_file" 2>/dev/null)
+        if [[ "$final_dns" == "1.1.1.1" ]]; then
+            print_success "DNS конфигурация сохранена"
+            return 0
+        else
+            print_warning "DNS конфигурация была перезаписана при запуске"
+            print_warning "Это нормально если x-ui управляет конфигурацией из БД"
+            return 0
+        fi
+    else
+        print_error "x-ui не запустился"
+        print_info "Восстановление бэкапа..."
+        cp "$backup_file" "$config_file"
+        systemctl start x-ui
+        return 1
+    fi
 }
 
 ################################################################################
@@ -765,7 +886,11 @@ main() {
     # Step 6: Create inbounds
     create_all_inbounds
 
-    # Step 7: Print summary
+    # Step 7: Configure DNS
+    echo
+    configure_dns
+
+    # Step 8: Print summary
     echo
     if print_summary; then
         exit 0
