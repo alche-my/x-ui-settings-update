@@ -412,6 +412,9 @@ apt-get update && apt-get install -y jq curl dnsutils netcat-openbsd
 ```
 x-ui-settings-update/
 ├── README.md                           # Этот файл
+├── README-dokodemo-bridge.md          # Документация Dokodemo-door моста
+├── setup-dokodemo-bridge.sh           # Настройка Dokodemo-door моста ✅
+├── update-dokodemo-ip.sh              # Обновление IP-адреса Dokodemo ✅
 └── x-ui-tuning/                        # Основная директория скриптов
     ├── README.md                       # Техническая документация
     ├── QUICKSTART.md                   # Быстрый старт
