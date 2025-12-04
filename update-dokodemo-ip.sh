@@ -39,9 +39,9 @@ SESSION_COOKIE=""
 # UTILITY FUNCTIONS
 ################################################################################
 
-# Print colored messages
+# Print colored messages (all to stderr to avoid capture in subshells)
 print_success() {
-    echo -e "${GREEN}✓${NC} $1"
+    echo -e "${GREEN}✓${NC} $1" >&2
 }
 
 print_error() {
@@ -49,15 +49,15 @@ print_error() {
 }
 
 print_warning() {
-    echo -e "${YELLOW}⚠${NC} $1"
+    echo -e "${YELLOW}⚠${NC} $1" >&2
 }
 
 print_info() {
-    echo -e "${BLUE}ℹ${NC} $1"
+    echo -e "${BLUE}ℹ${NC} $1" >&2
 }
 
 print_header() {
-    echo -e "\n${BOLD}${CYAN}=== $1 ===${NC}\n"
+    echo -e "\n${BOLD}${CYAN}=== $1 ===${NC}\n" >&2
 }
 
 # Exit with error message
@@ -288,8 +288,8 @@ select_dokodemo_inbound() {
     if ! echo "$json_response" | jq empty 2>/dev/null; then
         print_error "Неверный формат ответа от API"
         print_info "Ответ сервера (первые 500 символов):"
-        echo "$inbounds_response" | head -c 500
-        echo
+        echo "$inbounds_response" | head -c 500 >&2
+        echo >&2
         die "Не удалось распарсить ответ API"
     fi
 
@@ -299,7 +299,7 @@ select_dokodemo_inbound() {
     if [[ -z "$dokodemo_inbounds" ]] || [[ "$dokodemo_inbounds" == "null" ]]; then
         print_error "Не удалось извлечь инбаунды из ответа"
         print_info "JSON ответ:"
-        echo "$json_response" | jq '.' 2>/dev/null || echo "$json_response"
+        echo "$json_response" | jq '.' 2>&1 >&2 || echo "$json_response" >&2
         die "Dokodemo-door инбаунды не найдены"
     fi
 
@@ -310,10 +310,10 @@ select_dokodemo_inbound() {
     fi
 
     print_success "Найдено Dokodemo-door инбаундов: $count"
-    echo
+    echo >&2
 
     # Display list
-    echo -e "${BOLD}Доступные Dokodemo-door инбаунды:${NC}\n"
+    echo -e "${BOLD}Доступные Dokodemo-door инбаунды:${NC}\n" >&2
 
     for ((i=0; i<count; i++)); do
         local inbound=$(echo "$dokodemo_inbounds" | jq -c ".[$i]" 2>/dev/null)
@@ -334,11 +334,11 @@ select_dokodemo_inbound() {
             local remote_port=$(echo "$settings" | jq -r 'fromjson? | .port // "N/A"' 2>/dev/null || echo "N/A")
         fi
 
-        echo -e "${CYAN}[$((i+1))]${NC} ${BOLD}$remark${NC}"
-        echo -e "    ID: $id"
-        echo -e "    Локальный порт: ${BLUE}$port${NC}"
-        echo -e "    Перенаправление: ${BLUE}$address:$remote_port${NC}"
-        echo
+        echo -e "${CYAN}[$((i+1))]${NC} ${BOLD}$remark${NC}" >&2
+        echo -e "    ID: $id" >&2
+        echo -e "    Локальный порт: ${BLUE}$port${NC}" >&2
+        echo -e "    Перенаправление: ${BLUE}$address:$remote_port${NC}" >&2
+        echo >&2
     done
 
     # Ask user to select
@@ -382,16 +382,16 @@ update_inbound_ip() {
 
     print_header "Обновление IP-адреса"
 
-    echo -e "${BOLD}Выбран инбаунд:${NC} $remark"
-    echo -e "${BOLD}ID:${NC} $id"
-    echo -e "${BOLD}Текущий IP:${NC} ${RED}$current_address${NC}"
-    echo
+    echo -e "${BOLD}Выбран инбаунд:${NC} $remark" >&2
+    echo -e "${BOLD}ID:${NC} $id" >&2
+    echo -e "${BOLD}Текущий IP:${NC} ${RED}$current_address${NC}" >&2
+    echo >&2
 
     # Validate that we have a current address
     if [[ "$current_address" == "N/A" ]] || [[ -z "$current_address" ]] || [[ "$current_address" == "null" ]]; then
         print_error "Не удалось определить текущий IP-адрес"
         print_info "JSON инбаунда:"
-        echo "$inbound_json" | jq '.' 2>/dev/null || echo "$inbound_json"
+        echo "$inbound_json" | jq '.' 2>&1 >&2 || echo "$inbound_json" >&2
         return 1
     fi
 
@@ -408,11 +408,11 @@ update_inbound_ip() {
     done
 
     # Confirm change
-    echo
-    echo -e "${YELLOW}Вы уверены, что хотите изменить IP?${NC}"
-    echo -e "  Старый IP: ${RED}$current_address${NC}"
-    echo -e "  Новый IP:  ${GREEN}$new_ip${NC}"
-    echo
+    echo >&2
+    echo -e "${YELLOW}Вы уверены, что хотите изменить IP?${NC}" >&2
+    echo -e "  Старый IP: ${RED}$current_address${NC}" >&2
+    echo -e "  Новый IP:  ${GREEN}$new_ip${NC}" >&2
+    echo >&2
     read -p "Продолжить? (y/n): " -n 1 -r
     echo
 
@@ -438,12 +438,12 @@ update_inbound_ip() {
     # Update via API
     if update_inbound "$id" "$updated_inbound"; then
         print_success "IP-адрес успешно обновлен!"
-        echo
-        echo -e "${BOLD}Изменения:${NC}"
-        echo -e "  Инбаунд: ${CYAN}$remark${NC}"
-        echo -e "  Старый IP: ${RED}$current_address${NC}"
-        echo -e "  Новый IP:  ${GREEN}$new_ip${NC}"
-        echo
+        echo >&2
+        echo -e "${BOLD}Изменения:${NC}" >&2
+        echo -e "  Инбаунд: ${CYAN}$remark${NC}" >&2
+        echo -e "  Старый IP: ${RED}$current_address${NC}" >&2
+        echo -e "  Новый IP:  ${GREEN}$new_ip${NC}" >&2
+        echo >&2
         print_info "Изменения вступили в силу немедленно"
         return 0
     else
