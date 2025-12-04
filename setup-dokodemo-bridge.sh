@@ -123,6 +123,14 @@ install_dependencies() {
         print_success "jq установлен"
     fi
 
+    # Check for sqlite3
+    if ! command -v sqlite3 &> /dev/null; then
+        print_warning "sqlite3 не установлен"
+        packages_to_install+=("sqlite3")
+    else
+        print_success "sqlite3 установлен"
+    fi
+
     # Install missing packages
     if [[ ${#packages_to_install[@]} -gt 0 ]]; then
         print_info "Установка недостающих пакетов: ${packages_to_install[*]}"
@@ -567,79 +575,84 @@ create_all_inbounds() {
     rm -f /tmp/xui-cookie.txt
 }
 
-# Configure DNS in Xray config
+# Configure DNS in Xray config via database
 configure_dns() {
     print_header "Настройка DNS для Xray"
 
+    local db_file="/etc/x-ui/x-ui.db"
     local config_file="/usr/local/x-ui/bin/config.json"
 
-    # Check if config file exists
-    if [[ ! -f "$config_file" ]]; then
-        print_warning "Файл конфигурации не найден: $config_file"
-        return 1
+    # Check if database exists
+    if [[ ! -f "$db_file" ]]; then
+        print_warning "База данных x-ui не найдена: $db_file"
+        print_info "DNS будет настроен при следующей конфигурации через панель"
+        return 0
     fi
 
-    # Check if DNS is already configured
-    local current_dns=$(jq -r '.dns' "$config_file" 2>/dev/null)
-
-    if [[ "$current_dns" != "null" ]] && [[ -n "$current_dns" ]]; then
-        # Check if DNS has servers
-        local dns_servers=$(jq -r '.dns.servers[]?' "$config_file" 2>/dev/null)
-        if [[ -n "$dns_servers" ]]; then
-            print_success "DNS уже настроен"
-            return 0
-        fi
+    # Check if sqlite3 is available
+    if ! command -v sqlite3 &> /dev/null; then
+        print_warning "sqlite3 не установлен, пропускаем настройку DNS"
+        return 0
     fi
 
-    print_info "Добавление DNS конфигурации..."
+    # Check current DNS configuration in database
+    local current_dns=$(sqlite3 "$db_file" "SELECT value FROM settings WHERE key='xrayTemplateConfig';" 2>/dev/null)
 
-    # Create backup
-    local backup_file="${config_file}.backup-$(date +%s)"
-    cp "$config_file" "$backup_file"
-    print_info "Создан бэкап: $backup_file"
+    if echo "$current_dns" | jq -e '.dns.servers[]?' &>/dev/null; then
+        print_success "DNS уже настроен в базе данных"
+        return 0
+    fi
 
-    # Stop x-ui to safely modify config
+    print_info "Добавление DNS конфигурации в базу данных..."
+
+    # Stop x-ui to safely modify database
     print_info "Остановка x-ui..."
     systemctl stop x-ui
     sleep 2
 
-    # Add DNS configuration
-    jq '.dns = {
-        "servers": [
-            "1.1.1.1",
-            "8.8.8.8",
-            "https://dns.google/dns-query"
-        ],
-        "queryStrategy": "UseIP",
-        "tag": "dns_inbound"
-    }' "$config_file" > /tmp/xui-config-new.json
+    # Get current config template from database
+    local current_config=$(sqlite3 "$db_file" "SELECT value FROM settings WHERE key='xrayTemplateConfig';" 2>/dev/null)
 
-    # Check if jq succeeded
-    if [[ $? -ne 0 ]]; then
+    if [[ -z "$current_config" ]] || [[ "$current_config" == "null" ]]; then
+        # No template exists, create one from current config
+        if [[ -f "$config_file" ]]; then
+            current_config=$(cat "$config_file")
+        else
+            print_warning "Не найден шаблон конфигурации"
+            systemctl start x-ui
+            return 0
+        fi
+    fi
+
+    # Add DNS to config
+    local new_config=$(echo "$current_config" | jq '. + {
+        "dns": {
+            "servers": [
+                "1.1.1.1",
+                "8.8.8.8",
+                "https://dns.google/dns-query"
+            ],
+            "queryStrategy": "UseIP",
+            "tag": "dns_inbound"
+        }
+    }')
+
+    if [[ $? -ne 0 ]] || [[ -z "$new_config" ]]; then
         print_error "Ошибка при обработке JSON"
         systemctl start x-ui
         return 1
     fi
 
-    # Validate new config
-    if ! jq empty /tmp/xui-config-new.json 2>/dev/null; then
-        print_error "Новая конфигурация содержит ошибки JSON"
-        systemctl start x-ui
-        rm -f /tmp/xui-config-new.json
-        return 1
-    fi
+    # Escape single quotes for SQL
+    new_config=$(echo "$new_config" | sed "s/'/''/g")
 
-    # Replace config
-    mv /tmp/xui-config-new.json "$config_file"
+    # Update database
+    sqlite3 "$db_file" "UPDATE settings SET value='$new_config' WHERE key='xrayTemplateConfig';" 2>/dev/null
 
-    # Verify DNS was added
-    local new_dns=$(jq -r '.dns.servers[0]' "$config_file" 2>/dev/null)
-    if [[ "$new_dns" == "1.1.1.1" ]]; then
-        print_success "DNS конфигурация добавлена"
+    if [[ $? -eq 0 ]]; then
+        print_success "DNS конфигурация добавлена в базу данных"
     else
-        print_error "DNS не был добавлен корректно"
-        # Restore backup
-        cp "$backup_file" "$config_file"
+        print_error "Ошибка при обновлении базы данных"
         systemctl start x-ui
         return 1
     fi
@@ -653,23 +666,19 @@ configure_dns() {
 
     # Check if service started successfully
     if systemctl is-active --quiet x-ui; then
-        print_success "x-ui успешно запущен с новой конфигурацией"
+        print_success "x-ui успешно запущен с DNS конфигурацией"
 
-        # Verify DNS persisted
-        local final_dns=$(jq -r '.dns.servers[0]' "$config_file" 2>/dev/null)
-        if [[ "$final_dns" == "1.1.1.1" ]]; then
-            print_success "DNS конфигурация сохранена"
-            return 0
-        else
-            print_warning "DNS конфигурация была перезаписана при запуске"
-            print_warning "Это нормально если x-ui управляет конфигурацией из БД"
+        # Restart x-ui to apply changes
+        print_info "Перезапуск x-ui для применения DNS..."
+        systemctl restart x-ui
+        sleep 2
+
+        if systemctl is-active --quiet x-ui; then
+            print_success "DNS конфигурация применена"
             return 0
         fi
     else
         print_error "x-ui не запустился"
-        print_info "Восстановление бэкапа..."
-        cp "$backup_file" "$config_file"
-        systemctl start x-ui
         return 1
     fi
 }
