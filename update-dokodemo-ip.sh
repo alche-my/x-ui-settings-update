@@ -121,6 +121,9 @@ get_api_credentials() {
     read -p "URL панели 3x-ui (по умолчанию $DEFAULT_PANEL_URL): " PANEL_URL
     PANEL_URL=${PANEL_URL:-$DEFAULT_PANEL_URL}
 
+    # Remove trailing slash from URL to avoid double slashes
+    PANEL_URL=${PANEL_URL%/}
+
     # Get username
     read -p "Логин администратора (по умолчанию $DEFAULT_USERNAME): " API_USERNAME
     API_USERNAME=${API_USERNAME:-$DEFAULT_USERNAME}
@@ -138,21 +141,26 @@ get_api_credentials() {
     done
 
     print_success "Учетные данные сохранены"
+    print_info "Используется URL: $PANEL_URL"
 }
 
 # Login to 3x-ui API and get session cookie
 api_login() {
     print_info "Аутентификация в 3x-ui API..."
 
+    local login_url="${PANEL_URL}/login"
+    print_info "URL запроса: $login_url"
+
     local response
     local http_code
 
-    response=$(curl -s -w "\n%{http_code}" -X POST "${PANEL_URL}/login" \
+    response=$(curl -s -w "\n%{http_code}" -X POST "$login_url" \
         -H "Content-Type: application/json" \
         -d "{\"username\":\"${API_USERNAME}\",\"password\":\"${API_PASSWORD}\"}" \
         -c /tmp/xui-cookie.txt)
 
     http_code=$(echo "$response" | tail -1)
+    local body=$(echo "$response" | head -n -1)
 
     if [[ "$http_code" -eq 200 ]]; then
         # Extract session cookie
@@ -166,10 +174,14 @@ api_login() {
         fi
 
         print_error "Не удалось получить сессию"
+        print_info "Ответ сервера: $body"
         return 1
     else
         print_error "Ошибка аутентификации (HTTP $http_code)"
         print_error "Проверьте URL, логин и пароль"
+        if [[ -n "$body" ]]; then
+            print_info "Ответ сервера: $body"
+        fi
         return 1
     fi
 }
