@@ -123,6 +123,14 @@ install_dependencies() {
         print_success "jq установлен"
     fi
 
+    # Check for sqlite3
+    if ! command -v sqlite3 &> /dev/null; then
+        print_warning "sqlite3 не установлен"
+        packages_to_install+=("sqlite3")
+    else
+        print_success "sqlite3 установлен"
+    fi
+
     # Install missing packages
     if [[ ${#packages_to_install[@]} -gt 0 ]]; then
         print_info "Установка недостающих пакетов: ${packages_to_install[*]}"
@@ -456,33 +464,48 @@ create_dokodemo_inbound() {
 
     print_info "Создание inbound: Dokodemo -> $name"
 
-    # Prepare JSON payload
+    # Prepare settings as JSON string (3x-ui API requirement)
+    local settings_json=$(jq -n \
+        --arg address "$remote_ip" \
+        --argjson port "$remote_port" \
+        '{
+            address: $address,
+            port: $port,
+            network: "tcp,udp"
+        }' | jq -c .)
+
+    # Prepare streamSettings as JSON string (3x-ui API requirement)
+    local stream_settings_json=$(jq -n \
+        '{
+            network: "tcp",
+            security: "none"
+        }' | jq -c .)
+
+    # Prepare sniffing as JSON string (3x-ui API requirement)
+    local sniffing_json=$(jq -n \
+        '{
+            enabled: true,
+            destOverride: ["http", "tls"]
+        }' | jq -c .)
+
+    # Prepare final JSON payload with stringified fields
     local json_payload=$(jq -n \
         --arg remark "Dokodemo -> $name" \
         --arg listen "0.0.0.0" \
         --argjson port "$local_port" \
         --arg protocol "dokodemo-door" \
-        --arg address "$remote_ip" \
-        --argjson remote_port "$remote_port" \
+        --arg settings "$settings_json" \
+        --arg streamSettings "$stream_settings_json" \
+        --arg sniffing "$sniffing_json" \
         '{
             enable: true,
             remark: $remark,
             listen: $listen,
             port: $port,
             protocol: $protocol,
-            settings: {
-                address: $address,
-                port: $remote_port,
-                network: "tcp,udp"
-            },
-            streamSettings: {
-                network: "tcp",
-                security: "none"
-            },
-            sniffing: {
-                enabled: true,
-                destOverride: ["http", "tls"]
-            }
+            settings: $settings,
+            streamSettings: $streamSettings,
+            sniffing: $sniffing
         }')
 
     # Make API request
@@ -550,6 +573,114 @@ create_all_inbounds() {
 
     # Cleanup cookie file
     rm -f /tmp/xui-cookie.txt
+}
+
+# Configure DNS in Xray config via database
+configure_dns() {
+    print_header "Настройка DNS для Xray"
+
+    local db_file="/etc/x-ui/x-ui.db"
+    local config_file="/usr/local/x-ui/bin/config.json"
+
+    # Check if database exists
+    if [[ ! -f "$db_file" ]]; then
+        print_warning "База данных x-ui не найдена: $db_file"
+        print_info "DNS будет настроен при следующей конфигурации через панель"
+        return 0
+    fi
+
+    # Check if sqlite3 is available
+    if ! command -v sqlite3 &> /dev/null; then
+        print_warning "sqlite3 не установлен, пропускаем настройку DNS"
+        return 0
+    fi
+
+    # Check current DNS configuration in database
+    local current_dns=$(sqlite3 "$db_file" "SELECT value FROM settings WHERE key='xrayTemplateConfig';" 2>/dev/null)
+
+    if echo "$current_dns" | jq -e '.dns.servers[]?' &>/dev/null; then
+        print_success "DNS уже настроен в базе данных"
+        return 0
+    fi
+
+    print_info "Добавление DNS конфигурации в базу данных..."
+
+    # Stop x-ui to safely modify database
+    print_info "Остановка x-ui..."
+    systemctl stop x-ui
+    sleep 2
+
+    # Get current config template from database
+    local current_config=$(sqlite3 "$db_file" "SELECT value FROM settings WHERE key='xrayTemplateConfig';" 2>/dev/null)
+
+    if [[ -z "$current_config" ]] || [[ "$current_config" == "null" ]]; then
+        # No template exists, create one from current config
+        if [[ -f "$config_file" ]]; then
+            current_config=$(cat "$config_file")
+        else
+            print_warning "Не найден шаблон конфигурации"
+            systemctl start x-ui
+            return 0
+        fi
+    fi
+
+    # Add DNS to config
+    local new_config=$(echo "$current_config" | jq '. + {
+        "dns": {
+            "servers": [
+                "1.1.1.1",
+                "8.8.8.8",
+                "https://dns.google/dns-query"
+            ],
+            "queryStrategy": "UseIP",
+            "tag": "dns_inbound"
+        }
+    }')
+
+    if [[ $? -ne 0 ]] || [[ -z "$new_config" ]]; then
+        print_error "Ошибка при обработке JSON"
+        systemctl start x-ui
+        return 1
+    fi
+
+    # Escape single quotes for SQL
+    new_config=$(echo "$new_config" | sed "s/'/''/g")
+
+    # Update database
+    sqlite3 "$db_file" "UPDATE settings SET value='$new_config' WHERE key='xrayTemplateConfig';" 2>/dev/null
+
+    if [[ $? -eq 0 ]]; then
+        print_success "DNS конфигурация добавлена в базу данных"
+    else
+        print_error "Ошибка при обновлении базы данных"
+        systemctl start x-ui
+        return 1
+    fi
+
+    # Start x-ui
+    print_info "Запуск x-ui..."
+    systemctl start x-ui
+
+    # Wait for service to start
+    sleep 3
+
+    # Check if service started successfully
+    if systemctl is-active --quiet x-ui; then
+        print_success "x-ui успешно запущен с DNS конфигурацией"
+
+        # Restart x-ui to apply changes
+        print_info "Перезапуск x-ui для применения DNS..."
+        systemctl restart x-ui
+        sleep 2
+
+        if systemctl is-active --quiet x-ui; then
+            print_success "DNS конфигурация применена"
+            return 0
+        fi
+    else
+        print_error "x-ui не запустился"
+        return 1
+    fi
 }
 
 ################################################################################
@@ -764,7 +895,11 @@ main() {
     # Step 6: Create inbounds
     create_all_inbounds
 
-    # Step 7: Print summary
+    # Step 7: Configure DNS
+    echo
+    configure_dns
+
+    # Step 8: Print summary
     echo
     if print_summary; then
         exit 0
