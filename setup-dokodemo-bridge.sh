@@ -574,113 +574,137 @@ create_all_inbounds() {
         fi
     done
 
-    # Cleanup cookie file
-    rm -f /tmp/xui-cookie.txt
+    # Note: Don't cleanup cookie here - it's needed for DNS configuration
 }
 
-# Configure DNS in Xray config
+# Configure DNS in Xray config via API
 configure_dns() {
     print_header "Настройка DNS для Xray"
 
-    local config_file="/usr/local/x-ui/bin/config.json"
+    # Check if already logged in (SESSION_COOKIE should be set from create_all_inbounds)
+    if [[ -z "$SESSION_COOKIE" ]]; then
+        print_info "Аутентификация в x-ui API..."
+        if ! api_login; then
+            print_error "Не удалось аутентифицироваться для настройки DNS"
+            rm -f /tmp/xui-cookie.txt
+            return 1
+        fi
+    fi
 
-    # Check if config file exists
-    if [[ ! -f "$config_file" ]]; then
-        print_warning "Файл конфигурации не найден: $config_file"
+    print_info "Получение текущей конфигурации Xray..."
+
+    # Get current Xray configuration
+    local response
+    local http_code
+
+    response=$(curl -s -w "\n%{http_code}" -X POST "${PANEL_URL}/panel/xray/" \
+        -H "Content-Type: application/json" \
+        -H "Cookie: 3x-ui=${SESSION_COOKIE}")
+
+    http_code=$(echo "$response" | tail -1)
+    local body=$(echo "$response" | head -n -1)
+
+    if [[ "$http_code" -ne 200 ]]; then
+        print_error "Не удалось получить конфигурацию Xray (HTTP $http_code)"
+        rm -f /tmp/xui-cookie.txt
+        return 1
+    fi
+
+    # Parse current config
+    local xray_setting=$(echo "$body" | jq -r '.obj.xraySetting' 2>/dev/null)
+
+    if [[ -z "$xray_setting" ]] || [[ "$xray_setting" == "null" ]]; then
+        print_error "Не удалось прочитать текущую конфигурацию Xray"
+        rm -f /tmp/xui-cookie.txt
         return 1
     fi
 
     # Check if DNS is already configured
-    local current_dns=$(jq -r '.dns' "$config_file" 2>/dev/null)
-
-    if [[ "$current_dns" != "null" ]] && [[ -n "$current_dns" ]]; then
-        # Check if DNS has servers
-        local dns_servers=$(jq -r '.dns.servers[]?' "$config_file" 2>/dev/null)
-        if [[ -n "$dns_servers" ]]; then
-            print_success "DNS уже настроен"
-            return 0
-        fi
+    local current_dns=$(echo "$xray_setting" | jq -r '.dns.servers[]?' 2>/dev/null)
+    if [[ -n "$current_dns" ]]; then
+        print_success "DNS уже настроен в базе данных"
+        rm -f /tmp/xui-cookie.txt
+        return 0
     fi
 
-    print_info "Добавление DNS конфигурации..."
+    print_info "Добавление DNS конфигурации через API..."
 
-    # Create backup
-    local backup_file="${config_file}.backup-$(date +%s)"
-    cp "$config_file" "$backup_file"
-    print_info "Создан бэкап: $backup_file"
+    # Add DNS configuration to current settings
+    local updated_config=$(echo "$xray_setting" | jq '. + {
+        "dns": {
+            "servers": [
+                "1.1.1.1",
+                "8.8.8.8",
+                "https://dns.google/dns-query"
+            ],
+            "queryStrategy": "UseIP",
+            "tag": "dns_out"
+        }
+    }' 2>/dev/null)
 
-    # Stop x-ui to safely modify config
-    print_info "Остановка x-ui..."
-    systemctl stop x-ui
-    sleep 2
-
-    # Add DNS configuration
-    jq '.dns = {
-        "servers": [
-            "1.1.1.1",
-            "8.8.8.8",
-            "https://dns.google/dns-query"
-        ],
-        "queryStrategy": "UseIP",
-        "tag": "dns_inbound"
-    }' "$config_file" > /tmp/xui-config-new.json
-
-    # Check if jq succeeded
-    if [[ $? -ne 0 ]]; then
-        print_error "Ошибка при обработке JSON"
-        systemctl start x-ui
+    if [[ -z "$updated_config" ]] || [[ "$updated_config" == "null" ]]; then
+        print_error "Не удалось обновить конфигурацию"
+        rm -f /tmp/xui-cookie.txt
         return 1
     fi
 
-    # Validate new config
-    if ! jq empty /tmp/xui-config-new.json 2>/dev/null; then
-        print_error "Новая конфигурация содержит ошибки JSON"
-        systemctl start x-ui
-        rm -f /tmp/xui-config-new.json
-        return 1
-    fi
+    # Update configuration via API
+    local update_response
+    local update_http_code
 
-    # Replace config
-    mv /tmp/xui-config-new.json "$config_file"
+    # URL encode the config
+    local encoded_config=$(echo "$updated_config" | jq -c . | jq -sRr @uri)
 
-    # Verify DNS was added
-    local new_dns=$(jq -r '.dns.servers[0]' "$config_file" 2>/dev/null)
-    if [[ "$new_dns" == "1.1.1.1" ]]; then
-        print_success "DNS конфигурация добавлена"
-    else
-        print_error "DNS не был добавлен корректно"
-        # Restore backup
-        cp "$backup_file" "$config_file"
-        systemctl start x-ui
-        return 1
-    fi
+    update_response=$(curl -s -w "\n%{http_code}" -X POST "${PANEL_URL}/panel/xray/update" \
+        -H "Content-Type: application/x-www-form-urlencoded" \
+        -H "Cookie: 3x-ui=${SESSION_COOKIE}" \
+        -d "xraySetting=${encoded_config}")
 
-    # Start x-ui
-    print_info "Запуск x-ui..."
-    systemctl start x-ui
+    update_http_code=$(echo "$update_response" | tail -1)
+    local update_body=$(echo "$update_response" | head -n -1)
 
-    # Wait for service to start
-    sleep 3
+    if [[ "$update_http_code" -eq 200 ]]; then
+        local success=$(echo "$update_body" | jq -r '.success // false' 2>/dev/null)
 
-    # Check if service started successfully
-    if systemctl is-active --quiet x-ui; then
-        print_success "x-ui успешно запущен с новой конфигурацией"
+        if [[ "$success" == "true" ]]; then
+            print_success "DNS конфигурация обновлена в базе данных"
 
-        # Verify DNS persisted
-        local final_dns=$(jq -r '.dns.servers[0]' "$config_file" 2>/dev/null)
-        if [[ "$final_dns" == "1.1.1.1" ]]; then
-            print_success "DNS конфигурация сохранена"
-            return 0
+            # Restart Xray service to apply changes
+            print_info "Перезапуск Xray для применения настроек..."
+
+            local restart_response=$(curl -s -X POST "${PANEL_URL}/panel/api/server/restartXrayService" \
+                -H "Cookie: 3x-ui=${SESSION_COOKIE}")
+
+            sleep 3
+
+            # Verify Xray is running
+            if systemctl is-active --quiet x-ui; then
+                print_success "DNS успешно настроен и применен"
+
+                # Cleanup cookie file
+                rm -f /tmp/xui-cookie.txt
+                return 0
+            else
+                print_warning "x-ui не запустился после перезапуска"
+                print_info "Проверьте логи: journalctl -u x-ui -n 20"
+
+                # Cleanup cookie file
+                rm -f /tmp/xui-cookie.txt
+                return 1
+            fi
         else
-            print_warning "DNS конфигурация была перезаписана при запуске"
-            print_warning "Это нормально если x-ui управляет конфигурацией из БД"
-            return 0
+            local msg=$(echo "$update_body" | jq -r '.msg // "Unknown error"' 2>/dev/null)
+            print_error "API вернул ошибку: $msg"
+
+            # Cleanup cookie file
+            rm -f /tmp/xui-cookie.txt
+            return 1
         fi
     else
-        print_error "x-ui не запустился"
-        print_info "Восстановление бэкапа..."
-        cp "$backup_file" "$config_file"
-        systemctl start x-ui
+        print_error "HTTP ошибка при обновлении: $update_http_code"
+
+        # Cleanup cookie file
+        rm -f /tmp/xui-cookie.txt
         return 1
     fi
 }
