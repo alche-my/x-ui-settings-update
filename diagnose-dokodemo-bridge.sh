@@ -237,10 +237,8 @@ check_xui_config() {
             "   • Порт \(.port) → \(.settings.address):\(.settings.port) [\(.tag)]"' \
             "$config_file" 2>/dev/null || print_warning "   Не удалось прочитать детали"
     else
-        print_error "Dokodemo-door inbound'ы не найдены"
-        add_issue "Отсутствуют Dokodemo inbound'ы"
-        add_recommendation "Создайте inbound'ы: запустите setup-dokodemo-bridge.sh"
-        return 1
+        print_warning "Dokodemo-door inbound'ы не найдены в config.json"
+        print_info "Проверяем базу данных x-ui..."
     fi
 
     # Check for duplicate inbounds
@@ -282,13 +280,22 @@ check_xui_database() {
     if [[ $db_dokodemo_count -gt 0 ]]; then
         print_success "Dokodemo inbound'ов в БД: $db_dokodemo_count"
 
-        # Show details
+        # Show details with settings
         echo -e "${CYAN}   Детали из БД:${NC}"
-        sqlite3 "$db_file" "SELECT id, remark, port, enable FROM inbounds WHERE protocol='dokodemo-door';" 2>/dev/null | \
-            while IFS='|' read -r id remark port enable; do
+        sqlite3 "$db_file" "SELECT id, remark, port, enable, settings FROM inbounds WHERE protocol='dokodemo-door';" 2>/dev/null | \
+            while IFS='|' read -r id remark port enable settings; do
                 local status="выключен"
                 [[ "$enable" == "1" ]] && status="включен"
-                echo "   • ID:$id Port:$port [$remark] - $status"
+
+                # Parse settings JSON to extract target address and port
+                local target_info=""
+                if [[ -n "$settings" ]]; then
+                    local target_addr=$(echo "$settings" | jq -r '.address // "N/A"' 2>/dev/null)
+                    local target_port=$(echo "$settings" | jq -r '.port // "N/A"' 2>/dev/null)
+                    target_info=" → ${target_addr}:${target_port}"
+                fi
+
+                echo "   • ID:$id Port:$port${target_info} [$remark] - $status"
             done
     else
         print_error "Dokodemo inbound'ы не найдены в БД"
@@ -312,18 +319,25 @@ check_network_ports() {
         return 0
     fi
 
-    # Get Dokodemo ports from config
-    local config_file="/usr/local/x-ui/bin/config.json"
-    if [[ ! -f "$config_file" ]]; then
-        print_warning "Конфигурация не найдена, не можем проверить порты"
-        return 0
+    # Try to get ports from database first
+    local ports=""
+    local db_file="/etc/x-ui/x-ui.db"
+
+    if [[ -f "$db_file" ]] && command -v sqlite3 &> /dev/null; then
+        ports=$(sqlite3 "$db_file" "SELECT port FROM inbounds WHERE protocol='dokodemo-door' AND enable=1;" 2>/dev/null)
     fi
 
-    local ports=$(jq -r '.inbounds[] | select(.protocol=="dokodemo-door") | .port' \
-        "$config_file" 2>/dev/null)
+    # Fallback to config file
+    if [[ -z "$ports" ]]; then
+        local config_file="/usr/local/x-ui/bin/config.json"
+        if [[ -f "$config_file" ]]; then
+            ports=$(jq -r '.inbounds[] | select(.protocol=="dokodemo-door") | .port' \
+                "$config_file" 2>/dev/null)
+        fi
+    fi
 
     if [[ -z "$ports" ]]; then
-        print_warning "Dokodemo порты не найдены в конфигурации"
+        print_warning "Dokodemo порты не найдены"
         return 0
     fi
 
@@ -357,12 +371,24 @@ check_firewall() {
         if ufw status 2>/dev/null | grep -q "Status: active"; then
             print_info "UFW активен"
 
-            # Get Dokodemo ports
-            local config_file="/usr/local/x-ui/bin/config.json"
-            if [[ -f "$config_file" ]]; then
-                local ports=$(jq -r '.inbounds[] | select(.protocol=="dokodemo-door") | .port' \
-                    "$config_file" 2>/dev/null)
+            # Try to get ports from database first
+            local ports=""
+            local db_file="/etc/x-ui/x-ui.db"
 
+            if [[ -f "$db_file" ]] && command -v sqlite3 &> /dev/null; then
+                ports=$(sqlite3 "$db_file" "SELECT port FROM inbounds WHERE protocol='dokodemo-door' AND enable=1;" 2>/dev/null)
+            fi
+
+            # Fallback to config file
+            if [[ -z "$ports" ]]; then
+                local config_file="/usr/local/x-ui/bin/config.json"
+                if [[ -f "$config_file" ]]; then
+                    ports=$(jq -r '.inbounds[] | select(.protocol=="dokodemo-door") | .port' \
+                        "$config_file" 2>/dev/null)
+                fi
+            fi
+
+            if [[ -n "$ports" ]]; then
                 echo "$ports" | while read port; do
                     if ufw status 2>/dev/null | grep -qE "${port}/tcp.*ALLOW"; then
                         print_success "Порт $port разрешен в UFW"
@@ -388,18 +414,34 @@ check_firewall() {
 check_finnish_servers() {
     print_header "9. Проверка доступности финских серверов"
 
-    local config_file="/usr/local/x-ui/bin/config.json"
-    if [[ ! -f "$config_file" ]]; then
-        print_warning "Конфигурация не найдена, пропускаем проверку серверов"
-        return 0
+    # Try to get servers from database first
+    local servers=""
+    local db_file="/etc/x-ui/x-ui.db"
+
+    if [[ -f "$db_file" ]] && command -v sqlite3 &> /dev/null && command -v jq &> /dev/null; then
+        # Get settings from database and parse JSON
+        local db_settings=$(sqlite3 "$db_file" "SELECT settings FROM inbounds WHERE protocol='dokodemo-door';" 2>/dev/null)
+
+        if [[ -n "$db_settings" ]]; then
+            servers=$(echo "$db_settings" | while read -r settings; do
+                if [[ -n "$settings" ]]; then
+                    echo "$settings" | jq -r 'select(.address != null and .port != null) | "\(.address):\(.port)"' 2>/dev/null
+                fi
+            done)
+        fi
     fi
 
-    # Get Finnish server IPs
-    local servers=$(jq -r '.inbounds[] | select(.protocol=="dokodemo-door") |
-        "\(.settings.address):\(.settings.port)"' "$config_file" 2>/dev/null)
+    # Fallback to config file
+    if [[ -z "$servers" ]]; then
+        local config_file="/usr/local/x-ui/bin/config.json"
+        if [[ -f "$config_file" ]]; then
+            servers=$(jq -r '.inbounds[] | select(.protocol=="dokodemo-door") |
+                "\(.settings.address):\(.settings.port)"' "$config_file" 2>/dev/null)
+        fi
+    fi
 
     if [[ -z "$servers" ]]; then
-        print_warning "Финские серверы не найдены в конфигурации"
+        print_warning "Целевые серверы не найдены"
         return 0
     fi
 
