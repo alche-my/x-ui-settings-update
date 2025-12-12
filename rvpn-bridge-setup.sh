@@ -506,6 +506,175 @@ ask_exit_parameters() {
 }
 
 ################################################################################
+# SYSTEM CHECK FUNCTIONS
+################################################################################
+
+# Check if port is listening
+# Usage: is_port_listening 443
+is_port_listening() {
+    local port=$1
+
+    if [[ -z "$port" ]]; then
+        log_error "is_port_listening: порт не указан"
+        return 2
+    fi
+
+    # Use ss to check if port is listening
+    if command -v ss &> /dev/null; then
+        if ss -lntup 2>/dev/null | grep -q ":${port} "; then
+            log_debug "Порт ${port} занят"
+            return 0
+        else
+            log_debug "Порт ${port} свободен"
+            return 1
+        fi
+    else
+        log_warn "ss не найден, используем netstat"
+        if netstat -lntup 2>/dev/null | grep -q ":${port} "; then
+            log_debug "Порт ${port} занят"
+            return 0
+        else
+            log_debug "Порт ${port} свободен"
+            return 1
+        fi
+    fi
+}
+
+# Pick a free port starting from preferred
+# Usage: pick_free_port 443
+pick_free_port() {
+    local preferred_port=$1
+    local max_attempts=100
+    local current_port=$preferred_port
+
+    if [[ -z "$preferred_port" ]]; then
+        log_error "pick_free_port: предпочтительный порт не указан"
+        return 1
+    fi
+
+    log_debug "Поиск свободного порта, начиная с ${preferred_port}"
+
+    # Try preferred port first
+    if ! is_port_listening "$current_port"; then
+        log_info "Использую порт: ${current_port}"
+        echo "$current_port"
+        return 0
+    fi
+
+    log_warn "Порт ${preferred_port} занят, ищу альтернативу"
+
+    # Try sequential ports
+    for i in $(seq 1 10); do
+        current_port=$((preferred_port + i))
+        if ! is_port_listening "$current_port"; then
+            log_info "Найден свободный порт: ${current_port} (предпочтительный ${preferred_port} был занят)"
+            echo "$current_port"
+            return 0
+        fi
+    done
+
+    # Try random ports in range 20000-60000
+    for i in $(seq 1 $max_attempts); do
+        current_port=$((20000 + RANDOM % 40000))
+        if ! is_port_listening "$current_port"; then
+            log_info "Найден свободный порт: ${current_port} (случайный выбор)"
+            echo "$current_port"
+            return 0
+        fi
+    done
+
+    log_error "Не удалось найти свободный порт после ${max_attempts} попыток"
+    return 1
+}
+
+# Check DNS resolution
+check_dns() {
+    log_debug "Проверка DNS резолюции"
+
+    local test_domains=("github.com" "google.com" "cloudflare.com")
+    local success=false
+
+    for domain in "${test_domains[@]}"; do
+        if getent hosts "$domain" &> /dev/null; then
+            log_success "DNS работает (проверка: ${domain})"
+            success=true
+            break
+        else
+            log_debug "DNS не смог разрешить ${domain}"
+        fi
+    done
+
+    if [[ "$success" == "false" ]]; then
+        log_warn "DNS резолюция не работает"
+        return 1
+    fi
+
+    return 0
+}
+
+# Check outbound internet connectivity
+check_outbound_internet() {
+    log_debug "Проверка исходящего интернет соединения"
+
+    local test_urls=("https://www.google.com" "https://www.cloudflare.com" "https://1.1.1.1")
+    local success=false
+
+    for url in "${test_urls[@]}"; do
+        if curl -I --max-time 5 --silent --fail "$url" &> /dev/null; then
+            log_success "Исходящее интернет соединение работает (проверка: ${url})"
+            success=true
+            break
+        else
+            log_debug "Не удалось подключиться к ${url}"
+        fi
+    done
+
+    if [[ "$success" == "false" ]]; then
+        log_warn "Исходящее интернет соединение не работает"
+        return 1
+    fi
+
+    return 0
+}
+
+# Check OS version
+check_os() {
+    log_debug "Проверка операционной системы"
+
+    if [[ ! -f /etc/os-release ]]; then
+        log_warn "Не удалось определить ОС (/etc/os-release не найден)"
+        return 1
+    fi
+
+    # Read OS info without sourcing
+    local os_id=$(grep "^ID=" /etc/os-release | cut -d'=' -f2 | tr -d '"')
+    local os_version_id=$(grep "^VERSION_ID=" /etc/os-release | cut -d'=' -f2 | tr -d '"')
+    local os_name=$(grep "^NAME=" /etc/os-release | cut -d'=' -f2 | tr -d '"')
+    local os_version=$(grep "^VERSION=" /etc/os-release | cut -d'=' -f2 | tr -d '"')
+
+    log_info "ОС: ${os_name} ${os_version}"
+
+    if [[ "$os_id" != "ubuntu" ]]; then
+        log_warn "Этот скрипт предназначен для Ubuntu, обнаружено: ${os_name}"
+        log_warn "Продолжаем на свой страх и риск..."
+        return 1
+    fi
+
+    # Check Ubuntu version
+    case "$os_version_id" in
+        "22.04"|"24.04")
+            log_success "Поддерживаемая версия Ubuntu: ${os_version_id}"
+            return 0
+            ;;
+        *)
+            log_warn "Рекомендуется Ubuntu 22.04 или 24.04, обнаружено: ${os_version_id}"
+            log_warn "Продолжаем, но могут возникнуть проблемы"
+            return 1
+            ;;
+    esac
+}
+
+################################################################################
 # MAIN SETUP FUNCTIONS (STUBS)
 ################################################################################
 
@@ -513,52 +682,98 @@ ask_exit_parameters() {
 install_deps() {
     log_step "Установка зависимостей"
 
+    # Check OS first
+    check_os
+
     local missing_pkgs=()
 
-    # Check curl
-    if ! command -v curl &> /dev/null; then
-        missing_pkgs+=("curl")
-        log_debug "Отсутствует: curl"
-    else
-        log_debug "Найден: curl"
+    # Essential utilities
+    local required_commands=(
+        "curl:curl"
+        "jq:jq"
+        "sqlite3:sqlite3"
+        "openssl:openssl"
+        "nc:netcat-openbsd"
+        "netstat:net-tools"
+        "ss:iproute2"
+        "lsof:lsof"
+        "getent:libc-bin"
+    )
+
+    # Optional utilities
+    local optional_commands=(
+        "unzip:unzip"
+        "tar:tar"
+    )
+
+    log_info "Проверка обязательных утилит..."
+
+    # Check required commands
+    for entry in "${required_commands[@]}"; do
+        local cmd="${entry%%:*}"
+        local pkg="${entry##*:}"
+
+        if ! command -v "$cmd" &> /dev/null; then
+            missing_pkgs+=("$pkg")
+            log_debug "Отсутствует: $cmd (пакет: $pkg)"
+        else
+            local version=""
+            case "$cmd" in
+                curl)
+                    version=$(curl --version 2>/dev/null | head -n1)
+                    ;;
+                jq)
+                    version=$(jq --version 2>/dev/null)
+                    ;;
+                openssl)
+                    version=$(openssl version 2>/dev/null)
+                    ;;
+                sqlite3)
+                    version=$(sqlite3 --version 2>/dev/null | cut -d' ' -f1)
+                    ;;
+            esac
+
+            if [[ -n "$version" ]]; then
+                log_debug "Найден: $cmd ($version)"
+            else
+                log_debug "Найден: $cmd"
+            fi
+        fi
+    done
+
+    # Check optional commands
+    log_info "Проверка опциональных утилит..."
+    for entry in "${optional_commands[@]}"; do
+        local cmd="${entry%%:*}"
+        local pkg="${entry##*:}"
+
+        if ! command -v "$cmd" &> /dev/null; then
+            missing_pkgs+=("$pkg")
+            log_debug "Отсутствует (опционально): $cmd (пакет: $pkg)"
+        else
+            log_debug "Найден: $cmd"
+        fi
+    done
+
+    # Add ca-certificates if needed
+    if [[ ! -d /etc/ssl/certs ]] || [[ $(ls -1 /etc/ssl/certs/*.pem 2>/dev/null | wc -l) -eq 0 ]]; then
+        log_debug "CA сертификаты требуют обновления"
+        if [[ ! " ${missing_pkgs[*]} " =~ " ca-certificates " ]]; then
+            missing_pkgs+=("ca-certificates")
+        fi
     fi
 
-    # Check jq
-    if ! command -v jq &> /dev/null; then
-        missing_pkgs+=("jq")
-        log_debug "Отсутствует: jq"
-    else
-        log_debug "Найден: jq"
-    fi
-
-    # Check sqlite3
-    if ! command -v sqlite3 &> /dev/null; then
-        missing_pkgs+=("sqlite3")
-        log_debug "Отсутствует: sqlite3"
-    else
-        log_debug "Найден: sqlite3"
-    fi
-
-    # Check netcat (nc command)
-    if ! command -v nc &> /dev/null; then
-        missing_pkgs+=("netcat-openbsd")
-        log_debug "Отсутствует: nc (netcat)"
-    else
-        log_debug "Найден: nc (netcat)"
-    fi
-
-    # Check net-tools (netstat command)
-    if ! command -v netstat &> /dev/null; then
-        missing_pkgs+=("net-tools")
-        log_debug "Отсутствует: netstat (net-tools)"
-    else
-        log_debug "Найден: netstat (net-tools)"
+    # Remove duplicates
+    if [[ ${#missing_pkgs[@]} -gt 0 ]]; then
+        local unique_pkgs=($(printf '%s\n' "${missing_pkgs[@]}" | sort -u))
+        missing_pkgs=("${unique_pkgs[@]}")
     fi
 
     if [[ ${#missing_pkgs[@]} -gt 0 ]]; then
-        log_info "Установка недостающих пакетов: ${missing_pkgs[*]}"
+        log_info "Требуется установка пакетов: ${missing_pkgs[*]}"
 
         # Update package lists (allow warnings)
+        log_info "Обновление списка пакетов..."
         set +e
         DEBIAN_FRONTEND=noninteractive apt-get update -qq 2>&1
         local update_status=$?
@@ -569,19 +784,44 @@ install_deps() {
         fi
 
         # Install packages
+        log_info "Установка пакетов..."
         set +e
         DEBIAN_FRONTEND=noninteractive apt-get install -y "${missing_pkgs[@]}" 2>&1
         local install_status=$?
         set -e
 
         if [[ $install_status -eq 0 ]]; then
-            log_success "Зависимости установлены"
+            log_success "Все зависимости успешно установлены"
         else
-            log_warn "Некоторые пакеты не удалось установить (код: ${install_status}). Продолжаем..."
+            log_warn "Некоторые пакеты не удалось установить (код: ${install_status})"
+
+            # Verify critical packages
+            local critical_missing=()
+            for entry in "${required_commands[@]}"; do
+                local cmd="${entry%%:*}"
+                if ! command -v "$cmd" &> /dev/null; then
+                    critical_missing+=("$cmd")
+                fi
+            done
+
+            if [[ ${#critical_missing[@]} -gt 0 ]]; then
+                log_error "Критические утилиты отсутствуют: ${critical_missing[*]}"
+                log_error "Невозможно продолжить без этих утилит"
+                return 1
+            else
+                log_warn "Продолжаем с установленными пакетами..."
+            fi
         fi
     else
         log_success "Все зависимости уже установлены"
     fi
+
+    # Run network checks
+    log_info "Выполнение сетевых проверок..."
+    check_dns || log_warn "DNS проверка не пройдена (не критично)"
+    check_outbound_internet || log_warn "Проверка интернета не пройдена (может повлиять на загрузку компонентов)"
+
+    log_success "Проверка зависимостей завершена"
 }
 
 # Ensure 3x-ui is installed and running
@@ -732,9 +972,12 @@ main() {
 
     # Save configuration
     save_config_to_artifacts
+    log_info "Конфигурация сохранена"
 
     # Execute setup steps
+    log_info "Начинаем установку зависимостей"
     install_deps
+    log_info "Зависимости установлены, проверяем 3x-ui"
     ensure_3xui
 
     if [[ "$ROLE" == "exit" ]]; then
