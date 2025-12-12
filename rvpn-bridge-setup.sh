@@ -1254,6 +1254,70 @@ extract_client_uuid_by_email() {
 }
 
 ################################################################################
+# OUTBOUND FUNCTIONS (CONFIG.JSON)
+################################################################################
+
+# Check if outbound exists by tag in config.json
+# Usage: outbound_exists_by_tag "TO_EXIT"
+# Returns: 0 if exists, 1 if not
+outbound_exists_by_tag() {
+    local tag=$1
+    local xray_config
+
+    xray_config=$(get_xray_config_json)
+
+    if [[ -z "$xray_config" ]]; then
+        log_debug "Xray config не найден"
+        return 1
+    fi
+
+    if jq -e ".outbounds[] | select(.tag==\"${tag}\")" "$xray_config" &>/dev/null; then
+        log_debug "Outbound с tag='${tag}' существует"
+        return 0
+    else
+        log_debug "Outbound с tag='${tag}' не найден"
+        return 1
+    fi
+}
+
+# Get outbound settings by tag from config.json
+get_outbound_by_tag() {
+    local tag=$1
+    local xray_config
+
+    xray_config=$(get_xray_config_json)
+
+    if [[ -z "$xray_config" ]]; then
+        return 1
+    fi
+
+    jq ".outbounds[] | select(.tag==\"${tag}\")" "$xray_config" 2>/dev/null || echo ""
+}
+
+# Check if routing rule exists for inbound tag
+routing_rule_exists() {
+    local inbound_tag=$1
+    local outbound_tag=$2
+    local xray_config
+
+    xray_config=$(get_xray_config_json)
+
+    if [[ -z "$xray_config" ]]; then
+        log_debug "Xray config не найден"
+        return 1
+    fi
+
+    # Check if routing rule exists with specific inboundTag and outboundTag
+    if jq -e ".routing.rules[] | select(.inboundTag[]? == \"${inbound_tag}\" and .outboundTag == \"${outbound_tag}\")" "$xray_config" &>/dev/null; then
+        log_debug "Routing rule для '${inbound_tag}' -> '${outbound_tag}' существует"
+        return 0
+    else
+        log_debug "Routing rule для '${inbound_tag}' -> '${outbound_tag}' не найден"
+        return 1
+    fi
+}
+
+################################################################################
 # API FUNCTIONS FOR 3X-UI
 ################################################################################
 
@@ -1806,6 +1870,294 @@ create_entry_inbound_via_db() {
 }
 
 ################################################################################
+# ENTRY OUTBOUND AND ROUTING SETUP
+################################################################################
+
+# Validate EXIT parameters from artifacts.json
+validate_exit_parameters() {
+    log_debug "Валидация параметров EXIT из artifacts.json"
+
+    local missing_params=()
+
+    # Load parameters from artifacts if not set
+    if [[ -z "$EXIT_IP" ]]; then
+        EXIT_IP=$(get_artifact "exit.ip")
+    fi
+
+    if [[ -z "$EXIT_PORT" ]]; then
+        EXIT_PORT=$(get_artifact "exit.port")
+    fi
+
+    if [[ -z "$EXIT_SNI" ]]; then
+        EXIT_SNI=$(get_artifact "exit.sni")
+    fi
+
+    if [[ -z "$EXIT_PBK" ]]; then
+        EXIT_PBK=$(get_artifact "exit.publicKey")
+    fi
+
+    if [[ -z "$EXIT_SID" ]]; then
+        EXIT_SID=$(get_artifact "exit.shortId")
+    fi
+
+    if [[ -z "$EXIT_UUID" ]]; then
+        EXIT_UUID=$(get_artifact "exit.bridgeUuid")
+    fi
+
+    # Check required parameters
+    [[ -z "$EXIT_IP" || "$EXIT_IP" == "null" ]] && missing_params+=("exit.ip")
+    [[ -z "$EXIT_PORT" || "$EXIT_PORT" == "null" ]] && missing_params+=("exit.port")
+    [[ -z "$EXIT_SNI" || "$EXIT_SNI" == "null" ]] && missing_params+=("exit.sni")
+    [[ -z "$EXIT_PBK" || "$EXIT_PBK" == "null" ]] && missing_params+=("exit.publicKey")
+    [[ -z "$EXIT_SID" || "$EXIT_SID" == "null" ]] && missing_params+=("exit.shortId")
+    [[ -z "$EXIT_UUID" || "$EXIT_UUID" == "null" ]] && missing_params+=("exit.bridgeUuid")
+
+    if [[ ${#missing_params[@]} -gt 0 ]]; then
+        log_error "Отсутствуют обязательные параметры EXIT:"
+        for param in "${missing_params[@]}"; do
+            log_error "  - ${param}"
+        done
+        log_error ""
+        log_error "Сначала настройте EXIT сервер или укажите параметры вручную:"
+        log_error "  --exit-ip IP --exit-port PORT --exit-sni SNI \\"
+        log_error "  --exit-pbk PUBLIC_KEY --exit-sid SHORT_ID --exit-uuid UUID"
+        return 1
+    fi
+
+    log_success "Параметры EXIT валидны:"
+    log_info "  IP: ${EXIT_IP}"
+    log_info "  Port: ${EXIT_PORT}"
+    log_info "  SNI: ${EXIT_SNI}"
+    log_info "  Public Key: ${EXIT_PBK:0:32}..."
+    log_info "  Short ID: ${EXIT_SID}"
+    log_info "  Bridge UUID: ${EXIT_UUID}"
+
+    return 0
+}
+
+# Create outbound TO_EXIT on ENTRY server
+create_entry_outbound_to_exit() {
+    log_step "Создание outbound TO_EXIT"
+
+    local outbound_tag="TO_EXIT"
+
+    # Validate EXIT parameters first
+    if ! validate_exit_parameters; then
+        return 1
+    fi
+
+    # Check if outbound already exists
+    if outbound_exists_by_tag "$outbound_tag"; then
+        log_success "Outbound '${outbound_tag}' уже существует"
+        return 0
+    fi
+
+    log_info "Создание нового outbound TO_EXIT"
+
+    local xray_config
+    xray_config=$(get_xray_config_json)
+
+    if [[ -z "$xray_config" ]]; then
+        log_error "Не удалось найти конфигурацию Xray"
+        return 1
+    fi
+
+    # Create outbound JSON
+    local outbound_json=$(jq -n \
+        --arg tag "$outbound_tag" \
+        --arg protocol "vless" \
+        --arg address "$EXIT_IP" \
+        --argjson port "$EXIT_PORT" \
+        --arg uuid "$EXIT_UUID" \
+        --arg sni "$EXIT_SNI" \
+        --arg pbk "$EXIT_PBK" \
+        --arg sid "$EXIT_SID" \
+        --arg fp "chrome" \
+        '{
+            tag: $tag,
+            protocol: $protocol,
+            settings: {
+                vnext: [{
+                    address: $address,
+                    port: $port,
+                    users: [{
+                        id: $uuid,
+                        encryption: "none",
+                        flow: ""
+                    }]
+                }]
+            },
+            streamSettings: {
+                network: "tcp",
+                security: "reality",
+                realitySettings: {
+                    show: false,
+                    fingerprint: $fp,
+                    serverName: $sni,
+                    publicKey: $pbk,
+                    shortId: $sid,
+                    spiderX: ""
+                },
+                tcpSettings: {
+                    header: {
+                        type: "none"
+                    }
+                }
+            }
+        }')
+
+    # Stop x-ui before modifying config
+    log_info "Остановка x-ui для модификации config.json..."
+    systemctl stop x-ui
+    sleep 2
+
+    # Backup config
+    backup_configs || log_warn "Не удалось создать резервную копию"
+
+    # Add outbound to config.json
+    local temp_config=$(mktemp)
+
+    if jq ".outbounds += [${outbound_json}]" "$xray_config" > "$temp_config"; then
+        mv "$temp_config" "$xray_config"
+        log_success "Outbound добавлен в config.json"
+    else
+        log_error "Не удалось добавить outbound в config.json"
+        rm -f "$temp_config"
+        systemctl start x-ui
+        return 1
+    fi
+
+    # Start x-ui
+    log_info "Запуск x-ui..."
+    systemctl start x-ui
+    sleep 3
+
+    if systemctl is-active --quiet x-ui; then
+        log_success "x-ui успешно запущен"
+
+        # Verify outbound exists
+        if outbound_exists_by_tag "$outbound_tag"; then
+            log_success "Outbound '${outbound_tag}' успешно создан"
+            return 0
+        else
+            log_error "Outbound не найден после перезапуска"
+            return 1
+        fi
+    else
+        log_error "x-ui не запустился"
+        return 1
+    fi
+}
+
+# Setup routing from ENTRY_IN to TO_EXIT
+setup_entry_routing() {
+    log_step "Настройка routing ENTRY -> EXIT"
+
+    local inbound_tag="ENTRY_IN"
+    local outbound_tag="TO_EXIT"
+
+    # Check if routing rule already exists
+    if routing_rule_exists "$inbound_tag" "$outbound_tag"; then
+        log_success "Routing rule '${inbound_tag}' -> '${outbound_tag}' уже существует"
+        return 0
+    fi
+
+    log_info "Создание нового routing rule"
+
+    local xray_config
+    xray_config=$(get_xray_config_json)
+
+    if [[ -z "$xray_config" ]]; then
+        log_error "Не удалось найти конфигурацию Xray"
+        return 1
+    fi
+
+    # Create routing rule JSON
+    local routing_rule=$(jq -n \
+        --arg inbound "$inbound_tag" \
+        --arg outbound "$outbound_tag" \
+        '{
+            type: "field",
+            inboundTag: [$inbound],
+            outboundTag: $outbound,
+            network: "tcp,udp"
+        }')
+
+    # Stop x-ui before modifying config
+    log_info "Остановка x-ui для модификации routing..."
+    systemctl stop x-ui
+    sleep 2
+
+    # Backup config
+    backup_configs || log_warn "Не удалось создать резервную копию"
+
+    # Add routing rule to config.json
+    local temp_config=$(mktemp)
+
+    # Check if routing section exists, create if not
+    if ! jq -e '.routing' "$xray_config" &>/dev/null; then
+        log_debug "Создание секции routing"
+        jq '.routing = {domainStrategy: "AsIs", rules: []}' "$xray_config" > "$temp_config"
+        mv "$temp_config" "$xray_config"
+    fi
+
+    # Add rule
+    if jq ".routing.rules += [${routing_rule}]" "$xray_config" > "$temp_config"; then
+        mv "$temp_config" "$xray_config"
+        log_success "Routing rule добавлен в config.json"
+    else
+        log_error "Не удалось добавить routing rule"
+        rm -f "$temp_config"
+        systemctl start x-ui
+        return 1
+    fi
+
+    # Start x-ui
+    log_info "Запуск x-ui..."
+    systemctl start x-ui
+    sleep 3
+
+    if systemctl is-active --quiet x-ui; then
+        log_success "x-ui успешно перезапущен с новым routing"
+
+        # Verify routing rule exists
+        if routing_rule_exists "$inbound_tag" "$outbound_tag"; then
+            log_success "Routing rule успешно создан"
+            return 0
+        else
+            log_error "Routing rule не найден после перезапуска"
+            return 1
+        fi
+    else
+        log_error "x-ui не запустился"
+        return 1
+    fi
+}
+
+# Check connectivity to EXIT server
+check_exit_connectivity() {
+    log_step "Проверка связности с EXIT сервером"
+
+    if [[ -z "$EXIT_IP" || -z "$EXIT_PORT" ]]; then
+        log_warn "EXIT_IP или EXIT_PORT не установлены, пропускаем проверку"
+        return 0
+    fi
+
+    log_info "Проверка подключения к ${EXIT_IP}:${EXIT_PORT}..."
+
+    # Try to connect with timeout
+    if timeout 5 nc -zv "$EXIT_IP" "$EXIT_PORT" 2>&1 | grep -q "succeeded\|open"; then
+        log_success "Связь с EXIT сервером установлена"
+        return 0
+    else
+        log_warn "Не удалось подключиться к EXIT серверу"
+        log_warn "Это может быть нормально если EXIT находится за файрволом"
+        log_warn "Проверьте доступность порта ${EXIT_PORT} на ${EXIT_IP}"
+        return 1
+    fi
+}
+
+################################################################################
 # VLESS LINK GENERATION
 ################################################################################
 
@@ -1985,11 +2337,6 @@ setup_entry_bridge() {
     log_info "Public Key:      ${ENTRY_PBK:0:32}..."
     log_info "Short ID:        ${ENTRY_SID}"
     log_info "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    log_warn ""
-    log_warn "⚠️  ВАЖНО: ENTRY inbound готов для подключения пользователей"
-    log_warn "⚠️  Outbound и routing будут настроены в следующих подзадачах"
-    log_warn ""
-    log_info "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
     # Verify port is listening
     log_step "Проверка ENTRY inbound"
@@ -2014,8 +2361,35 @@ setup_entry_bridge() {
         fi
     fi
 
-    log_success "ENTRY сервер настроен и готов принимать пользователей"
-    log_info "TODO: Outbound на EXIT + routing (следующие подзадачи)"
+    log_success "ENTRY inbound настроен"
+
+    # Create outbound TO_EXIT
+    create_entry_outbound_to_exit || {
+        log_error "Не удалось создать outbound TO_EXIT"
+        log_warn "Каскад не будет работать без outbound"
+        return 1
+    }
+
+    # Setup routing
+    setup_entry_routing || {
+        log_error "Не удалось настроить routing"
+        log_warn "Каскад не будет работать без routing"
+        return 1
+    }
+
+    # Check connectivity to EXIT
+    check_exit_connectivity || log_warn "Связь с EXIT не проверена"
+
+    # Update artifacts
+    update_artifact "entry.bridge_configured" "true"
+    update_artifact "entry.bridge_configured_at" "$(date -Iseconds)"
+
+    log_success "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    log_success "ENTRY мост полностью настроен!"
+    log_success "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    log_info "Каскад: USERS -> ENTRY (${ENTRY_PORT}) -> EXIT (${EXIT_IP}:${EXIT_PORT})"
+    log_success "Пользователи могут подключаться к ENTRY и получать IP EXIT"
+
     return 0
 }
 
