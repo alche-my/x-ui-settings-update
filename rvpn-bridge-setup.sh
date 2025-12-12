@@ -1253,6 +1253,123 @@ extract_client_uuid_by_email() {
     echo "$settings" | jq -r ".clients[] | select(.email==\"${email}\") | .id" 2>/dev/null || echo ""
 }
 
+# Check if client exists in inbound by email
+# Usage: client_exists_in_inbound "ENTRY_IN" "test-client@local"
+client_exists_in_inbound() {
+    local inbound_tag=$1
+    local email=$2
+
+    if [[ ! -f "$XUI_DB" ]]; then
+        log_debug "БД не найдена: ${XUI_DB}"
+        return 1
+    fi
+
+    local settings
+    settings=$(get_inbound_settings_by_tag "$inbound_tag")
+
+    if [[ -z "$settings" ]]; then
+        log_debug "Inbound '${inbound_tag}' не найден"
+        return 1
+    fi
+
+    local uuid
+    uuid=$(extract_client_uuid_by_email "$settings" "$email")
+
+    if [[ -n "$uuid" && "$uuid" != "null" ]]; then
+        log_debug "Клиент '${email}' существует в '${inbound_tag}' с UUID: ${uuid}"
+        return 0
+    else
+        log_debug "Клиент '${email}' не найден в '${inbound_tag}'"
+        return 1
+    fi
+}
+
+# Add client to inbound via database
+# Usage: add_client_to_inbound "ENTRY_IN" "test-client@local" "uuid"
+add_client_to_inbound() {
+    local inbound_tag=$1
+    local email=$2
+    local uuid=$3
+
+    log_debug "Добавление клиента '${email}' в inbound '${inbound_tag}'"
+
+    if [[ ! -f "$XUI_DB" ]]; then
+        log_error "БД не найдена: ${XUI_DB}"
+        return 1
+    fi
+
+    # Get current settings
+    local settings
+    settings=$(get_inbound_settings_by_tag "$inbound_tag")
+
+    if [[ -z "$settings" ]]; then
+        log_error "Inbound '${inbound_tag}' не найден"
+        return 1
+    fi
+
+    # Check if client already exists
+    if client_exists_in_inbound "$inbound_tag" "$email"; then
+        log_warn "Клиент '${email}' уже существует в '${inbound_tag}'"
+        return 0
+    fi
+
+    # Create new client object
+    local new_client=$(jq -n \
+        --arg uuid "$uuid" \
+        --arg email "$email" \
+        '{
+            id: $uuid,
+            email: $email,
+            flow: "",
+            limitIp: 0,
+            totalGB: 0,
+            expiryTime: 0,
+            enable: true,
+            tgId: "",
+            subId: ""
+        }')
+
+    # Add client to settings
+    local new_settings
+    new_settings=$(echo "$settings" | jq --argjson client "$new_client" '.clients += [$client]')
+
+    if [[ -z "$new_settings" ]]; then
+        log_error "Не удалось добавить клиента в settings"
+        return 1
+    fi
+
+    # Escape for SQL
+    new_settings=$(echo "$new_settings" | sed "s/'/''/g")
+
+    # Update database
+    log_info "Остановка x-ui для обновления БД..."
+    systemctl stop x-ui
+    sleep 2
+
+    local sql="UPDATE inbounds SET settings='${new_settings}' WHERE tag='${inbound_tag}';"
+
+    if sqlite3 "$XUI_DB" "$sql" 2>&1; then
+        log_success "Клиент добавлен в БД"
+
+        # Start x-ui
+        log_info "Запуск x-ui..."
+        systemctl start x-ui
+        sleep 3
+
+        if systemctl is-active --quiet x-ui; then
+            log_success "x-ui успешно запущен"
+            return 0
+        else
+            log_error "x-ui не запустился"
+            return 1
+        fi
+    else
+        log_error "Ошибка при обновлении БД"
+        systemctl start x-ui
+        return 1
+    fi
+}
+
 ################################################################################
 # OUTBOUND FUNCTIONS (CONFIG.JSON)
 ################################################################################
@@ -2188,6 +2305,33 @@ generate_bridge_vless_link() {
     echo "$vless_url"
 }
 
+# Generate VLESS link for user client (ENTRY connection)
+# This link is for end users to connect to ENTRY server
+generate_user_vless_link() {
+    local uuid=$1
+    local server_ip=$2
+    local port=$3
+    local sni=$4
+    local public_key=$5
+    local short_id=$6
+    local fp=${7:-chrome}
+    local name=${8:-"ENTRY-User"}
+
+    # URL encode function
+    urlencode() {
+        local string="$1"
+        echo -n "$string" | jq -sRr @uri
+    }
+
+    local encoded_name=$(urlencode "$name")
+
+    # Build VLESS URL for user
+    # Format: vless://UUID@IP:PORT?encryption=none&security=reality&sni=SNI&fp=FP&pbk=PBK&sid=SID&type=tcp&flow=#NAME
+    local vless_url="vless://${uuid}@${server_ip}:${port}?encryption=none&security=reality&sni=${sni}&fp=${fp}&pbk=${public_key}&sid=${short_id}&type=tcp&flow=#${encoded_name}"
+
+    echo "$vless_url"
+}
+
 # Setup EXIT bridge
 setup_exit_bridge() {
     log_step "Настройка EXIT моста"
@@ -2396,10 +2540,104 @@ setup_entry_bridge() {
 # Create test client
 create_test_client() {
     log_step "Создание тестового клиента"
-    log_info "TODO: Создание тестового клиента на ENTRY (будет реализовано в следующих задачах)"
 
-    # Stub: будет реализовано позже
+    local inbound_tag="ENTRY_IN"
+    local test_email="test-client@local"
+    local test_uuid
+
+    # Check if ENTRY is configured
+    if [[ -z "$ENTRY_PORT" || -z "$ENTRY_PBK" || -z "$ENTRY_SID" || -z "$ENTRY_SNI" ]]; then
+        log_warn "ENTRY не настроен, загружаем параметры из artifacts.json"
+        ENTRY_PORT=$(get_artifact "entry.port")
+        ENTRY_PBK=$(get_artifact "entry.publicKey")
+        ENTRY_SID=$(get_artifact "entry.shortId")
+        ENTRY_SNI=$(get_artifact "entry.sni")
+        ENTRY_FP=$(get_artifact "entry.fingerprint")
+    fi
+
+    if [[ -z "$ENTRY_PORT" || "$ENTRY_PORT" == "null" ]]; then
+        log_error "ENTRY не настроен. Сначала настройте ENTRY сервер."
+        return 1
+    fi
+
+    # Check if test client already exists
+    if client_exists_in_inbound "$inbound_tag" "$test_email"; then
+        log_info "Тестовый клиент уже существует, используем существующий"
+
+        # Get existing UUID
+        local settings
+        settings=$(get_inbound_settings_by_tag "$inbound_tag")
+        test_uuid=$(extract_client_uuid_by_email "$settings" "$test_email")
+
+        if [[ -z "$test_uuid" ]]; then
+            log_error "Не удалось получить UUID существующего клиента"
+            return 1
+        fi
+    else
+        # Generate new UUID for test client
+        test_uuid=$(generate_uuid)
+        log_info "Создание нового тестового клиента с UUID: ${test_uuid}"
+
+        # Add client to ENTRY_IN inbound
+        add_client_to_inbound "$inbound_tag" "$test_email" "$test_uuid" || {
+            log_error "Не удалось добавить тестового клиента"
+            return 1
+        }
+    fi
+
+    # Get ENTRY server IP
+    local server_ip
+    server_ip=$(get_artifact "entry.ip")
+
+    if [[ -z "$server_ip" || "$server_ip" == "null" ]]; then
+        server_ip=$(curl -s -4 ifconfig.me 2>/dev/null) || \
+        server_ip=$(curl -s -4 icanhazip.com 2>/dev/null) || \
+        server_ip=$(hostname -I | awk '{print $1}')
+    fi
+
+    if [[ -z "$server_ip" ]]; then
+        log_warn "Не удалось определить IP сервера"
+        server_ip="UNKNOWN_IP"
+    fi
+
+    # Generate VLESS link for test client
+    log_info "Генерация VLESS ссылки для тестового клиента..."
+    local test_vless_link
+    test_vless_link=$(generate_user_vless_link \
+        "$test_uuid" \
+        "$server_ip" \
+        "$ENTRY_PORT" \
+        "$ENTRY_SNI" \
+        "$ENTRY_PBK" \
+        "$ENTRY_SID" \
+        "${ENTRY_FP:-chrome}" \
+        "Test-Client")
+
+    # Save to artifacts
+    update_artifact "test_client.email" "$test_email"
+    update_artifact "test_client.uuid" "$test_uuid"
+    update_artifact "test_client.vless_link" "$test_vless_link"
     update_artifact "test_client.created" "true"
+    update_artifact "test_client.created_at" "$(date -Iseconds)"
+
+    # Display test client info
+    log_success "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    log_success "Тестовый клиент создан!"
+    log_success "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    log_info "Email:       ${test_email}"
+    log_info "UUID:        ${test_uuid}"
+    log_info "Server:      ${server_ip}:${ENTRY_PORT}"
+    log_info "SNI:         ${ENTRY_SNI}"
+    log_info "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo ""
+    log_warn "📋 Скопируй и импортируй в клиент (v2rayN, Nekoray, etc.):"
+    echo ""
+    echo "$test_vless_link"
+    echo ""
+    log_info "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    log_info "Сохранено в: ${RVPN_ARTIFACTS}"
+
+    return 0
 }
 
 # Run tests
