@@ -824,25 +824,259 @@ install_deps() {
     log_success "Проверка зависимостей завершена"
 }
 
+################################################################################
+# 3X-UI MANAGEMENT FUNCTIONS
+################################################################################
+
+# Determine x-ui service name
+xui_service_name() {
+    log_debug "Определение имени сервиса x-ui"
+
+    # Check common service names
+    local possible_services=("x-ui" "3x-ui" "xui")
+
+    for service in "${possible_services[@]}"; do
+        if systemctl list-unit-files | grep -q "^${service}.service"; then
+            log_debug "Найден сервис: ${service}"
+            echo "$service"
+            return 0
+        fi
+    done
+
+    # Fallback: check if x-ui command exists
+    if command -v x-ui &> /dev/null; then
+        log_debug "Найдена команда x-ui, используем имя сервиса: x-ui"
+        echo "x-ui"
+        return 0
+    fi
+
+    log_debug "Сервис x-ui не найден"
+    return 1
+}
+
+# Backup x-ui and xray configs
+backup_configs() {
+    log_debug "Создание резервной копии конфигураций"
+
+    local backup_base="${RVPN_BASE_DIR}/backups"
+    local backup_date=$(date +%Y%m%d_%H%M%S)
+    local backup_dir="${backup_base}/${backup_date}"
+
+    mkdir -p "$backup_dir"
+
+    local backed_up=false
+
+    # Backup x-ui database
+    if [[ -f "$XUI_DB" ]]; then
+        cp "$XUI_DB" "${backup_dir}/x-ui.db"
+        log_debug "Скопирован: ${XUI_DB}"
+        backed_up=true
+    fi
+
+    # Backup xray config.json
+    local xray_config="/usr/local/x-ui/bin/config.json"
+    if [[ -f "$xray_config" ]]; then
+        cp "$xray_config" "${backup_dir}/config.json"
+        log_debug "Скопирован: ${xray_config}"
+        backed_up=true
+    fi
+
+    # Backup x-ui config
+    local xui_config="/etc/x-ui/x-ui.conf"
+    if [[ -f "$xui_config" ]]; then
+        cp "$xui_config" "${backup_dir}/x-ui.conf"
+        log_debug "Скопирован: ${xui_config}"
+        backed_up=true
+    fi
+
+    if [[ "$backed_up" == "true" ]]; then
+        log_success "Резервная копия создана: ${backup_dir}"
+        echo "$backup_dir"
+        return 0
+    else
+        log_warn "Нет файлов для резервного копирования"
+        return 1
+    fi
+}
+
+# Get Xray config.json
+get_xray_config_json() {
+    log_debug "Получение конфигурации Xray"
+
+    # Try common locations
+    local config_locations=(
+        "/usr/local/x-ui/bin/config.json"
+        "/etc/xray/config.json"
+        "/etc/v2ray/config.json"
+        "/usr/local/etc/xray/config.json"
+    )
+
+    for config_path in "${config_locations[@]}"; do
+        if [[ -f "$config_path" ]]; then
+            log_debug "Найден конфиг: ${config_path}"
+
+            # Validate JSON
+            if jq empty "$config_path" 2>/dev/null; then
+                log_success "Конфигурация Xray получена: ${config_path}"
+                echo "$config_path"
+                return 0
+            else
+                log_warn "Файл ${config_path} содержит невалидный JSON"
+            fi
+        fi
+    done
+
+    log_error "Не удалось найти конфигурацию Xray"
+    return 1
+}
+
+# Restart x-ui service
+xui_restart() {
+    log_debug "Перезапуск сервиса x-ui"
+
+    local service_name
+    service_name=$(xui_service_name)
+
+    if [[ -z "$service_name" ]]; then
+        log_error "Не удалось определить имя сервиса x-ui"
+        return 1
+    fi
+
+    log_info "Перезапуск сервиса: ${service_name}"
+
+    if systemctl restart "$service_name"; then
+        sleep 2  # Wait for service to start
+
+        if systemctl is-active --quiet "$service_name"; then
+            log_success "Сервис ${service_name} успешно перезапущен"
+            return 0
+        else
+            log_error "Сервис ${service_name} не запустился после перезапуска"
+            systemctl status "$service_name" --no-pager || true
+            return 1
+        fi
+    else
+        log_error "Не удалось перезапустить сервис ${service_name}"
+        return 1
+    fi
+}
+
 # Ensure 3x-ui is installed and running
 ensure_3xui() {
     log_step "Проверка 3x-ui"
 
+    local installed=false
+    local service_name
+
+    # Check if already installed
     if [[ -d "$XUI_DIR" ]]; then
-        log_success "3x-ui уже установлен"
-    else
-        log_warn "3x-ui не найден, начинается установка..."
-        log_info "TODO: Установка 3x-ui (будет реализовано в следующих задачах)"
-        # bash <(curl -Ls "$XUI_INSTALL_URL")
+        log_success "3x-ui уже установлен в: ${XUI_DIR}"
+        installed=true
+    elif command -v x-ui &> /dev/null; then
+        log_success "Команда x-ui найдена"
+        installed=true
     fi
 
-    # Check service status
-    if systemctl is-active --quiet x-ui; then
-        log_success "Сервис x-ui запущен"
-    else
-        log_warn "Сервис x-ui не запущен"
-        log_info "TODO: Запуск сервиса x-ui (будет реализовано в следующих задачах)"
+    # Install if not present
+    if [[ "$installed" == "false" ]]; then
+        log_warn "3x-ui не найден, начинается установка..."
+
+        # Ask for confirmation in interactive mode
+        if [[ "$NON_INTERACTIVE" != "true" ]]; then
+            echo ""
+            read -p "Установить 3x-ui сейчас? (y/n): " -n 1 -r
+            echo ""
+            if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+                log_error "Установка 3x-ui отменена пользователем"
+                log_error "3x-ui обязателен для работы скрипта"
+                return 1
+            fi
+        fi
+
+        log_info "Загрузка установщика 3x-ui..."
+
+        # Download and run installer
+        local install_script=$(mktemp)
+
+        if curl -sL "$XUI_INSTALL_URL" -o "$install_script"; then
+            log_info "Запуск установщика 3x-ui..."
+
+            # Run installer in non-interactive mode
+            if bash "$install_script" <<< "0" 2>&1 | tee -a "$LOG_FILE"; then
+                log_success "3x-ui успешно установлен"
+                installed=true
+            else
+                log_error "Ошибка при установке 3x-ui"
+                rm -f "$install_script"
+                return 1
+            fi
+
+            rm -f "$install_script"
+        else
+            log_error "Не удалось загрузить установщик 3x-ui"
+            log_error "URL: ${XUI_INSTALL_URL}"
+            return 1
+        fi
     fi
+
+    # Determine service name
+    service_name=$(xui_service_name)
+
+    if [[ -z "$service_name" ]]; then
+        log_warn "Не удалось определить имя сервиса x-ui"
+        log_warn "Попробуем использовать имя по умолчанию: x-ui"
+        service_name="x-ui"
+    fi
+
+    log_debug "Используется сервис: ${service_name}"
+
+    # Check service status
+    if systemctl is-active --quiet "$service_name" 2>/dev/null; then
+        log_success "Сервис ${service_name} запущен"
+    else
+        log_warn "Сервис ${service_name} не запущен"
+        log_info "Попытка запуска сервиса..."
+
+        # Enable and start service
+        if systemctl enable "$service_name" 2>&1 | tee -a "$LOG_FILE"; then
+            log_debug "Сервис ${service_name} включен в автозагрузку"
+        else
+            log_warn "Не удалось включить сервис в автозагрузку"
+        fi
+
+        if systemctl start "$service_name" 2>&1 | tee -a "$LOG_FILE"; then
+            sleep 2  # Wait for service to start
+
+            if systemctl is-active --quiet "$service_name"; then
+                log_success "Сервис ${service_name} успешно запущен"
+            else
+                log_error "Сервис ${service_name} не активен после запуска"
+                systemctl status "$service_name" --no-pager 2>&1 | tee -a "$LOG_FILE" || true
+                return 1
+            fi
+        else
+            log_error "Не удалось запустить сервис ${service_name}"
+            systemctl status "$service_name" --no-pager 2>&1 | tee -a "$LOG_FILE" || true
+            return 1
+        fi
+    fi
+
+    # Verify installation
+    log_info "Проверка конфигурации Xray..."
+    local xray_config
+    xray_config=$(get_xray_config_json)
+
+    if [[ -n "$xray_config" ]]; then
+        log_success "Конфигурация Xray доступна: ${xray_config}"
+
+        # Create initial backup
+        backup_configs || log_warn "Не удалось создать резервную копию"
+    else
+        log_warn "Конфигурация Xray не найдена (это нормально для новой установки)"
+    fi
+
+    log_success "Проверка 3x-ui завершена успешно"
+    return 0
 }
 
 # Setup EXIT bridge
