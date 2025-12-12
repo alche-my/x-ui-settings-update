@@ -1079,14 +1079,615 @@ ensure_3xui() {
     return 0
 }
 
+################################################################################
+# REALITY KEY GENERATION FUNCTIONS
+################################################################################
+
+# Find xray binary
+find_xray_binary() {
+    local possible_paths=(
+        "/usr/local/x-ui/bin/xray-linux-amd64"
+        "/usr/local/x-ui/bin/xray"
+        "/usr/bin/xray"
+        "/usr/local/bin/xray"
+    )
+
+    for path in "${possible_paths[@]}"; do
+        if [[ -x "$path" ]]; then
+            echo "$path"
+            return 0
+        fi
+    done
+
+    log_error "Xray binary не найден"
+    return 1
+}
+
+# Generate Reality keypair using xray x25519
+# Returns: "PRIVATE_KEY:PUBLIC_KEY"
+generate_reality_keypair() {
+    log_debug "Генерация Reality keypair"
+
+    local xray_bin
+    xray_bin=$(find_xray_binary)
+
+    if [[ -z "$xray_bin" ]]; then
+        return 1
+    fi
+
+    # Run xray x25519 command
+    local output
+    output=$("$xray_bin" x25519 2>/dev/null)
+
+    if [[ $? -ne 0 ]]; then
+        log_error "Не удалось сгенерировать ключи Reality"
+        return 1
+    fi
+
+    # Parse output
+    # Expected format:
+    # Private key: <base64>
+    # Public key: <base64>
+    local private_key=$(echo "$output" | grep -i "Private key" | awk '{print $NF}')
+    local public_key=$(echo "$output" | grep -i "Public key" | awk '{print $NF}')
+
+    if [[ -z "$private_key" ]] || [[ -z "$public_key" ]]; then
+        log_error "Не удалось распарсить ключи Reality"
+        log_debug "Output: $output"
+        return 1
+    fi
+
+    log_debug "Private key: ${private_key:0:20}..."
+    log_debug "Public key: ${public_key:0:20}..."
+
+    echo "${private_key}:${public_key}"
+    return 0
+}
+
+# Generate random UUID
+generate_uuid() {
+    if command -v uuidgen &> /dev/null; then
+        uuidgen | tr '[:upper:]' '[:lower:]'
+    else
+        # Fallback: generate UUID v4 using /dev/urandom
+        cat /proc/sys/kernel/random/uuid
+    fi
+}
+
+# Generate random short ID (8-16 hex chars)
+generate_short_id() {
+    local length=${1:-8}  # Default 8 chars
+    openssl rand -hex $((length / 2)) | cut -c1-${length}
+}
+
+################################################################################
+# DATABASE FUNCTIONS FOR INBOUNDS
+################################################################################
+
+# Check if inbound exists by tag
+# Usage: inbound_exists_by_tag "EXIT_IN"
+# Returns: 0 if exists, 1 if not
+inbound_exists_by_tag() {
+    local tag=$1
+
+    if [[ ! -f "$XUI_DB" ]]; then
+        log_debug "БД не найдена: ${XUI_DB}"
+        return 1
+    fi
+
+    local count
+    count=$(sqlite3 "$XUI_DB" "SELECT COUNT(*) FROM inbounds WHERE tag='${tag}';" 2>/dev/null || echo "0")
+
+    if [[ "$count" -gt 0 ]]; then
+        log_debug "Inbound с tag='${tag}' существует (count=${count})"
+        return 0
+    else
+        log_debug "Inbound с tag='${tag}' не найден"
+        return 1
+    fi
+}
+
+# Get inbound ID by tag
+# Usage: get_inbound_id_by_tag "EXIT_IN"
+get_inbound_id_by_tag() {
+    local tag=$1
+
+    if [[ ! -f "$XUI_DB" ]]; then
+        return 1
+    fi
+
+    sqlite3 "$XUI_DB" "SELECT id FROM inbounds WHERE tag='${tag}' LIMIT 1;" 2>/dev/null || echo ""
+}
+
+# Get inbound port by tag
+get_inbound_port_by_tag() {
+    local tag=$1
+
+    if [[ ! -f "$XUI_DB" ]]; then
+        return 1
+    fi
+
+    sqlite3 "$XUI_DB" "SELECT port FROM inbounds WHERE tag='${tag}' LIMIT 1;" 2>/dev/null || echo ""
+}
+
+# Get inbound settings by tag (JSON)
+get_inbound_settings_by_tag() {
+    local tag=$1
+
+    if [[ ! -f "$XUI_DB" ]]; then
+        return 1
+    fi
+
+    sqlite3 "$XUI_DB" "SELECT settings FROM inbounds WHERE tag='${tag}' LIMIT 1;" 2>/dev/null || echo ""
+}
+
+# Get inbound stream_settings by tag (JSON)
+get_inbound_stream_settings_by_tag() {
+    local tag=$1
+
+    if [[ ! -f "$XUI_DB" ]]; then
+        return 1
+    fi
+
+    sqlite3 "$XUI_DB" "SELECT stream_settings FROM inbounds WHERE tag='${tag}' LIMIT 1;" 2>/dev/null || echo ""
+}
+
+# Extract Reality public key from stream_settings
+extract_reality_public_key() {
+    local stream_settings=$1
+    echo "$stream_settings" | jq -r '.realitySettings.publicKey // empty' 2>/dev/null || echo ""
+}
+
+# Extract Reality short IDs from stream_settings
+extract_reality_short_ids() {
+    local stream_settings=$1
+    echo "$stream_settings" | jq -r '.realitySettings.shortIds[0] // empty' 2>/dev/null || echo ""
+}
+
+# Extract client UUID by email from settings
+extract_client_uuid_by_email() {
+    local settings=$1
+    local email=$2
+    echo "$settings" | jq -r ".clients[] | select(.email==\"${email}\") | .id" 2>/dev/null || echo ""
+}
+
+################################################################################
+# API FUNCTIONS FOR 3X-UI
+################################################################################
+
+# Global variable for session cookie
+XUI_SESSION_COOKIE=""
+
+# Login to 3x-ui API
+# Sets XUI_SESSION_COOKIE on success
+xui_api_login() {
+    log_debug "Аутентификация в 3x-ui API"
+
+    # Default credentials
+    local username="${XUI_API_USERNAME:-admin}"
+    local password="${XUI_API_PASSWORD:-admin}"
+    local panel_url="${XUI_API_URL:-http://localhost:2053}"
+
+    local response
+    local http_code
+    local cookie_file=$(mktemp)
+
+    response=$(curl -s -w "\n%{http_code}" -X POST "${panel_url}/login" \
+        -H "Content-Type: application/json" \
+        -d "{\"username\":\"${username}\",\"password\":\"${password}\"}" \
+        -c "$cookie_file" 2>&1)
+
+    http_code=$(echo "$response" | tail -1)
+
+    if [[ "$http_code" -eq 200 ]]; then
+        if [[ -f "$cookie_file" ]]; then
+            XUI_SESSION_COOKIE=$(grep -oP '(?<=3x-ui\s)[^\s]+' "$cookie_file" 2>/dev/null || echo "")
+
+            if [[ -n "$XUI_SESSION_COOKIE" ]]; then
+                log_success "Успешная аутентификация в 3x-ui API"
+                rm -f "$cookie_file"
+                return 0
+            fi
+        fi
+
+        log_error "Не удалось получить сессию"
+        rm -f "$cookie_file"
+        return 1
+    else
+        log_error "Ошибка аутентификации (HTTP ${http_code})"
+        rm -f "$cookie_file"
+        return 1
+    fi
+}
+
+################################################################################
+# EXIT BRIDGE INBOUND CREATION
+################################################################################
+
+# Create EXIT inbound with Reality
+# This function is idempotent - it won't create duplicates
+create_exit_inbound_reality() {
+    log_step "Создание EXIT inbound с Reality"
+
+    local inbound_tag="EXIT_IN"
+    local preferred_port=${EXIT_PORT:-443}
+    local sni=${EXIT_SNI:-github.com}
+    local fingerprint="chrome"
+
+    # Check if inbound already exists
+    if inbound_exists_by_tag "$inbound_tag"; then
+        log_success "Inbound '${inbound_tag}' уже существует"
+
+        local existing_id=$(get_inbound_id_by_tag "$inbound_tag")
+        local existing_port=$(get_inbound_port_by_tag "$inbound_tag")
+        local existing_settings=$(get_inbound_settings_by_tag "$inbound_tag")
+        local existing_stream=$(get_inbound_stream_settings_by_tag "$inbound_tag")
+
+        log_info "Существующий inbound ID: ${existing_id}"
+        log_info "Порт: ${existing_port}"
+
+        # Extract existing parameters
+        EXIT_PORT="$existing_port"
+        EXIT_PBK=$(extract_reality_public_key "$existing_stream")
+        EXIT_SID=$(extract_reality_short_ids "$existing_stream")
+        EXIT_UUID=$(extract_client_uuid_by_email "$existing_settings" "bridge-ru@local")
+
+        if [[ -z "$EXIT_UUID" ]]; then
+            log_warn "Bridge клиент не найден, UUID будет сгенерирован при следующем запуске"
+        fi
+
+        log_success "Параметры загружены из существующего inbound"
+        return 0
+    fi
+
+    log_info "Создание нового EXIT inbound с Reality"
+
+    # Pick free port
+    local actual_port
+    actual_port=$(pick_free_port "$preferred_port")
+
+    if [[ -z "$actual_port" ]]; then
+        log_error "Не удалось найти свободный порт"
+        return 1
+    fi
+
+    EXIT_PORT="$actual_port"
+
+    if [[ "$actual_port" != "$preferred_port" ]]; then
+        log_warn "Порт ${preferred_port} занят, используется ${actual_port}"
+    fi
+
+    # Generate Reality keypair
+    log_info "Генерация Reality ключей..."
+    local keypair
+    keypair=$(generate_reality_keypair)
+
+    if [[ $? -ne 0 ]] || [[ -z "$keypair" ]]; then
+        log_error "Не удалось сгенерировать Reality ключи"
+        return 1
+    fi
+
+    local private_key="${keypair%%:*}"
+    local public_key="${keypair##*:}"
+
+    log_success "Reality ключи сгенерированы"
+
+    # Generate short IDs
+    local short_id_1=$(generate_short_id 8)
+    local short_id_2=$(generate_short_id 16)
+
+    log_debug "Short IDs: ${short_id_1}, ${short_id_2}"
+
+    # Save to global variables (will be used later)
+    EXIT_PBK="$public_key"
+    EXIT_SID="$short_id_1"
+
+    # Generate bridge client UUID if not set
+    if [[ -z "$EXIT_UUID" ]]; then
+        EXIT_UUID=$(generate_uuid)
+        log_info "Сгенерирован bridge UUID: ${EXIT_UUID}"
+    fi
+
+    # Prepare VLESS client settings
+    local settings_json=$(jq -n \
+        --arg uuid "$EXIT_UUID" \
+        --arg email "bridge-ru@local" \
+        '{
+            clients: [{
+                id: $uuid,
+                email: $email,
+                flow: "",
+                limitIp: 0,
+                totalGB: 0,
+                expiryTime: 0,
+                enable: true,
+                tgId: "",
+                subId: ""
+            }],
+            decryption: "none",
+            fallbacks: []
+        }' | jq -c .)
+
+    # Prepare Reality stream settings
+    local stream_settings_json=$(jq -n \
+        --arg sni "$sni" \
+        --arg fp "$fingerprint" \
+        --arg pvk "$private_key" \
+        --arg pbk "$public_key" \
+        --arg sid1 "$short_id_1" \
+        --arg sid2 "$short_id_2" \
+        '{
+            network: "tcp",
+            security: "reality",
+            realitySettings: {
+                show: false,
+                dest: ($sni + ":443"),
+                xver: 0,
+                serverNames: [$sni],
+                privateKey: $pvk,
+                publicKey: $pbk,
+                shortIds: [$sid1, $sid2],
+                fingerprint: $fp,
+                spiderX: ""
+            },
+            tcpSettings: {
+                acceptProxyProtocol: false,
+                header: {
+                    type: "none"
+                }
+            }
+        }' | jq -c .)
+
+    # Prepare sniffing
+    local sniffing_json=$(jq -n \
+        '{
+            enabled: true,
+            destOverride: ["http", "tls", "quic"]
+        }' | jq -c .)
+
+    # Create inbound via API
+    log_info "Создание inbound через API..."
+
+    # Login first
+    if ! xui_api_login; then
+        log_warn "Не удалось авторизоваться в API, пробуем создать через БД"
+        create_exit_inbound_via_db "$inbound_tag" "$actual_port" "$settings_json" "$stream_settings_json" "$sniffing_json"
+        return $?
+    fi
+
+    local panel_url="${XUI_API_URL:-http://localhost:2053}"
+
+    # Prepare full payload
+    local json_payload=$(jq -n \
+        --argjson enable true \
+        --arg remark "EXIT Reality Inbound (bridge)" \
+        --arg listen "0.0.0.0" \
+        --argjson port "$actual_port" \
+        --arg protocol "vless" \
+        --arg settings "$settings_json" \
+        --arg streamSettings "$stream_settings_json" \
+        --arg sniffing "$sniffing_json" \
+        --arg tag "$inbound_tag" \
+        '{
+            enable: $enable,
+            remark: $remark,
+            listen: $listen,
+            port: $port,
+            protocol: $protocol,
+            settings: $settings,
+            streamSettings: $streamSettings,
+            sniffing: $sniffing,
+            tag: $tag
+        }')
+
+    local response
+    local http_code
+
+    response=$(curl -s -w "\n%{http_code}" -X POST "${panel_url}/panel/api/inbounds/add" \
+        -H "Content-Type: application/json" \
+        -H "Cookie: 3x-ui=${XUI_SESSION_COOKIE}" \
+        -d "$json_payload" 2>&1)
+
+    http_code=$(echo "$response" | tail -1)
+    local body=$(echo "$response" | head -n -1)
+
+    if [[ "$http_code" -eq 200 ]]; then
+        local success=$(echo "$body" | jq -r '.success // false' 2>/dev/null || echo "false")
+
+        if [[ "$success" == "true" ]]; then
+            log_success "EXIT inbound успешно создан через API"
+            return 0
+        else
+            local msg=$(echo "$body" | jq -r '.msg // "Unknown error"' 2>/dev/null || echo "Unknown error")
+            log_warn "API вернул ошибку: ${msg}"
+            log_info "Пробуем создать через БД..."
+            create_exit_inbound_via_db "$inbound_tag" "$actual_port" "$settings_json" "$stream_settings_json" "$sniffing_json"
+            return $?
+        fi
+    else
+        log_warn "HTTP ошибка: ${http_code}, пробуем через БД"
+        create_exit_inbound_via_db "$inbound_tag" "$actual_port" "$settings_json" "$stream_settings_json" "$sniffing_json"
+        return $?
+    fi
+}
+
+# Create EXIT inbound via direct database insertion (fallback)
+create_exit_inbound_via_db() {
+    local tag=$1
+    local port=$2
+    local settings=$3
+    local stream_settings=$4
+    local sniffing=$5
+
+    log_info "Создание inbound напрямую в БД"
+
+    if [[ ! -f "$XUI_DB" ]]; then
+        log_error "БД не найдена: ${XUI_DB}"
+        return 1
+    fi
+
+    # Escape single quotes for SQL
+    settings=$(echo "$settings" | sed "s/'/''/g")
+    stream_settings=$(echo "$stream_settings" | sed "s/'/''/g")
+    sniffing=$(echo "$sniffing" | sed "s/'/''/g")
+
+    local sql="INSERT INTO inbounds (user_id, up, down, total, remark, enable, expiry_time, listen, port, protocol, settings, stream_settings, tag, sniffing)
+               VALUES (1, 0, 0, 0, 'EXIT Reality Inbound (bridge)', 1, 0, '0.0.0.0', ${port}, 'vless', '${settings}', '${stream_settings}', '${tag}', '${sniffing}');"
+
+    # Stop x-ui before modifying DB
+    log_info "Остановка x-ui для модификации БД..."
+    systemctl stop x-ui
+    sleep 2
+
+    # Execute SQL
+    if sqlite3 "$XUI_DB" "$sql" 2>&1; then
+        log_success "Inbound создан в БД"
+
+        # Start x-ui
+        log_info "Запуск x-ui..."
+        systemctl start x-ui
+        sleep 3
+
+        if systemctl is-active --quiet x-ui; then
+            log_success "x-ui успешно запущен"
+            return 0
+        else
+            log_error "x-ui не запустился"
+            return 1
+        fi
+    else
+        log_error "Ошибка при вставке в БД"
+        systemctl start x-ui
+        return 1
+    fi
+}
+
+################################################################################
+# VLESS LINK GENERATION
+################################################################################
+
+# Generate VLESS link for bridge client
+# ⚠️ НЕ ВЫДАВАТЬ ПОЛЬЗОВАТЕЛЯМ - только для ENTRY сервера
+generate_bridge_vless_link() {
+    local uuid=$1
+    local server_ip=$2
+    local port=$3
+    local sni=$4
+    local public_key=$5
+    local short_id=$6
+    local fp=${7:-chrome}
+
+    # URL encode function
+    urlencode() {
+        local string="$1"
+        echo -n "$string" | jq -sRr @uri
+    }
+
+    # Build VLESS URL
+    # Format: vless://UUID@IP:PORT?security=reality&sni=SNI&fp=FP&pbk=PBK&sid=SID&type=tcp&flow=#NAME
+    local name="EXIT-Bridge-RU"
+    local encoded_name=$(urlencode "$name")
+
+    local vless_url="vless://${uuid}@${server_ip}:${port}?encryption=none&security=reality&sni=${sni}&fp=${fp}&pbk=${public_key}&sid=${short_id}&type=tcp&flow=#${encoded_name}"
+
+    echo "$vless_url"
+}
+
 # Setup EXIT bridge
 setup_exit_bridge() {
     log_step "Настройка EXIT моста"
-    log_info "TODO: Создание EXIT inbound + bridge client (будет реализовано в следующих задачах)"
 
-    # Stub: будет реализовано позже
+    # Set default SNI if not provided
+    EXIT_SNI=${EXIT_SNI:-github.com}
+    EXIT_PORT=${EXIT_PORT:-443}
+
+    # Create EXIT inbound with Reality
+    create_exit_inbound_reality || {
+        log_error "Не удалось создать EXIT inbound"
+        return 1
+    }
+
+    # Get server IP
+    local server_ip
+    server_ip=$(curl -s -4 ifconfig.me 2>/dev/null) || \
+    server_ip=$(curl -s -4 icanhazip.com 2>/dev/null) || \
+    server_ip=$(hostname -I | awk '{print $1}')
+
+    if [[ -z "$server_ip" ]]; then
+        log_warn "Не удалось определить внешний IP"
+        server_ip="UNKNOWN_IP"
+    fi
+
+    log_info "Внешний IP сервера: ${server_ip}"
+
+    # Save all bridge artifacts
+    log_info "Сохранение артефактов..."
+
+    update_artifact "role" "exit"
+    update_artifact "exit.ip" "$server_ip"
+    update_artifact "exit.port" "$EXIT_PORT"
+    update_artifact "exit.sni" "$EXIT_SNI"
+    update_artifact "exit.fingerprint" "chrome"
+    update_artifact "exit.publicKey" "$EXIT_PBK"
+    update_artifact "exit.shortId" "$EXIT_SID"
+    update_artifact "exit.bridgeUuid" "$EXIT_UUID"
     update_artifact "exit.configured" "true"
     update_artifact "exit.configured_at" "$(date -Iseconds)"
+
+    # Generate bridge VLESS link
+    log_info "Генерация bridge VLESS ссылки..."
+    local vless_link
+    vless_link=$(generate_bridge_vless_link "$EXIT_UUID" "$server_ip" "$EXIT_PORT" "$EXIT_SNI" "$EXIT_PBK" "$EXIT_SID")
+
+    update_artifact "exit.bridgeVlessLink" "$vless_link"
+
+    log_success "Артефакты сохранены в: ${RVPN_ARTIFACTS}"
+
+    # Display configuration
+    log_step "EXIT Конфигурация"
+    log_info "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    log_info "IP адрес:        ${server_ip}"
+    log_info "Порт:            ${EXIT_PORT}"
+    log_info "SNI:             ${EXIT_SNI}"
+    log_info "Fingerprint:     chrome"
+    log_info "Public Key:      ${EXIT_PBK:0:32}..."
+    log_info "Short ID:        ${EXIT_SID}"
+    log_info "Bridge UUID:     ${EXIT_UUID}"
+    log_info "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    log_warn ""
+    log_warn "⚠️  ВАЖНО: Bridge VLESS ссылка - НЕ ДЛЯ ПОЛЬЗОВАТЕЛЕЙ!"
+    log_warn "⚠️  Используется ТОЛЬКО ENTRY сервером для подключения"
+    log_warn ""
+    log_info "Bridge VLESS Link:"
+    echo "$vless_link"
+    log_warn ""
+    log_info "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+    # Verify port is listening
+    log_step "Проверка EXIT inbound"
+
+    sleep 3  # Wait for service to bind
+
+    if is_port_listening "$EXIT_PORT"; then
+        log_success "Порт ${EXIT_PORT} прослушивается"
+    else
+        log_warn "Порт ${EXIT_PORT} не прослушивается (может потребоваться время)"
+    fi
+
+    # Verify inbound exists in config
+    local xray_config
+    xray_config=$(get_xray_config_json)
+
+    if [[ -n "$xray_config" ]]; then
+        if jq -e ".inbounds[] | select(.tag==\"EXIT_IN\")" "$xray_config" &>/dev/null; then
+            log_success "Inbound 'EXIT_IN' присутствует в config.json"
+        else
+            log_warn "Inbound 'EXIT_IN' не найден в config.json (может быть в БД)"
+        fi
+    fi
+
+    log_success "EXIT сервер настроен и готов принимать подключения"
+    return 0
 }
 
 # Setup ENTRY bridge
