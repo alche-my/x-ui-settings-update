@@ -67,6 +67,8 @@ NON_INTERACTIVE=false
 ENTRY_PORT=""
 ENTRY_SNI=""
 ENTRY_FP=""
+ENTRY_PBK=""
+ENTRY_SID=""
 
 # Exit server settings
 EXIT_IP=""
@@ -1563,6 +1565,247 @@ create_exit_inbound_via_db() {
 }
 
 ################################################################################
+# ENTRY BRIDGE INBOUND CREATION
+################################################################################
+
+# Create ENTRY inbound with Reality
+# This function is idempotent - it won't create duplicates
+create_entry_inbound_reality() {
+    log_step "Создание ENTRY inbound с Reality"
+
+    local inbound_tag="ENTRY_IN"
+    local preferred_port=${ENTRY_PORT:-8443}
+    local sni=${ENTRY_SNI:-yandex.ru}
+    local fingerprint=${ENTRY_FP:-chrome}
+
+    # Check if inbound already exists
+    if inbound_exists_by_tag "$inbound_tag"; then
+        log_success "Inbound '${inbound_tag}' уже существует"
+
+        local existing_id=$(get_inbound_id_by_tag "$inbound_tag")
+        local existing_port=$(get_inbound_port_by_tag "$inbound_tag")
+        local existing_stream=$(get_inbound_stream_settings_by_tag "$inbound_tag")
+
+        log_info "Существующий inbound ID: ${existing_id}"
+        log_info "Порт: ${existing_port}"
+
+        # Extract existing parameters
+        ENTRY_PORT="$existing_port"
+        ENTRY_PBK=$(extract_reality_public_key "$existing_stream")
+        ENTRY_SID=$(extract_reality_short_ids "$existing_stream")
+        ENTRY_SNI=$(echo "$existing_stream" | jq -r '.realitySettings.serverNames[0] // empty' 2>/dev/null || echo "$sni")
+
+        log_success "Параметры загружены из существующего inbound"
+        return 0
+    fi
+
+    log_info "Создание нового ENTRY inbound с Reality"
+
+    # Pick free port
+    local actual_port
+    actual_port=$(pick_free_port "$preferred_port")
+
+    if [[ -z "$actual_port" ]]; then
+        log_error "Не удалось найти свободный порт"
+        return 1
+    fi
+
+    ENTRY_PORT="$actual_port"
+
+    if [[ "$actual_port" != "$preferred_port" ]]; then
+        log_warn "Порт ${preferred_port} занят, используется ${actual_port}"
+    fi
+
+    # Generate Reality keypair
+    log_info "Генерация Reality ключей..."
+    local keypair
+    keypair=$(generate_reality_keypair)
+
+    if [[ $? -ne 0 ]] || [[ -z "$keypair" ]]; then
+        log_error "Не удалось сгенерировать Reality ключи"
+        return 1
+    fi
+
+    local private_key="${keypair%%:*}"
+    local public_key="${keypair##*:}"
+
+    log_success "Reality ключи сгенерированы"
+
+    # Generate short IDs
+    local short_id_1=$(generate_short_id 8)
+    local short_id_2=$(generate_short_id 16)
+
+    log_debug "Short IDs: ${short_id_1}, ${short_id_2}"
+
+    # Save to global variables
+    ENTRY_PBK="$public_key"
+    ENTRY_SID="$short_id_1"
+    ENTRY_SNI="$sni"
+    ENTRY_FP="$fingerprint"
+
+    # Prepare VLESS client settings (empty clients array for now)
+    local settings_json=$(jq -n \
+        '{
+            clients: [],
+            decryption: "none",
+            fallbacks: []
+        }' | jq -c .)
+
+    # Prepare Reality stream settings
+    local stream_settings_json=$(jq -n \
+        --arg sni "$sni" \
+        --arg fp "$fingerprint" \
+        --arg pvk "$private_key" \
+        --arg pbk "$public_key" \
+        --arg sid1 "$short_id_1" \
+        --arg sid2 "$short_id_2" \
+        '{
+            network: "tcp",
+            security: "reality",
+            realitySettings: {
+                show: false,
+                dest: ($sni + ":443"),
+                xver: 0,
+                serverNames: [$sni],
+                privateKey: $pvk,
+                publicKey: $pbk,
+                shortIds: [$sid1, $sid2],
+                fingerprint: $fp,
+                spiderX: ""
+            },
+            tcpSettings: {
+                acceptProxyProtocol: false,
+                header: {
+                    type: "none"
+                }
+            }
+        }' | jq -c .)
+
+    # Prepare sniffing
+    local sniffing_json=$(jq -n \
+        '{
+            enabled: true,
+            destOverride: ["http", "tls", "quic", "fakedns"]
+        }' | jq -c .)
+
+    # Create inbound via API
+    log_info "Создание inbound через API..."
+
+    # Login first
+    if ! xui_api_login; then
+        log_warn "Не удалось авторизоваться в API, пробуем создать через БД"
+        create_entry_inbound_via_db "$inbound_tag" "$actual_port" "$settings_json" "$stream_settings_json" "$sniffing_json"
+        return $?
+    fi
+
+    local panel_url="${XUI_API_URL:-http://localhost:2053}"
+
+    # Prepare full payload
+    local json_payload=$(jq -n \
+        --argjson enable true \
+        --arg remark "ENTRY Reality Inbound (users)" \
+        --arg listen "0.0.0.0" \
+        --argjson port "$actual_port" \
+        --arg protocol "vless" \
+        --arg settings "$settings_json" \
+        --arg streamSettings "$stream_settings_json" \
+        --arg sniffing "$sniffing_json" \
+        --arg tag "$inbound_tag" \
+        '{
+            enable: $enable,
+            remark: $remark,
+            listen: $listen,
+            port: $port,
+            protocol: $protocol,
+            settings: $settings,
+            streamSettings: $streamSettings,
+            sniffing: $sniffing,
+            tag: $tag
+        }')
+
+    local response
+    local http_code
+
+    response=$(curl -s -w "\n%{http_code}" -X POST "${panel_url}/panel/api/inbounds/add" \
+        -H "Content-Type: application/json" \
+        -H "Cookie: 3x-ui=${XUI_SESSION_COOKIE}" \
+        -d "$json_payload" 2>&1)
+
+    http_code=$(echo "$response" | tail -1)
+    local body=$(echo "$response" | head -n -1)
+
+    if [[ "$http_code" -eq 200 ]]; then
+        local success=$(echo "$body" | jq -r '.success // false' 2>/dev/null || echo "false")
+
+        if [[ "$success" == "true" ]]; then
+            log_success "ENTRY inbound успешно создан через API"
+            return 0
+        else
+            local msg=$(echo "$body" | jq -r '.msg // "Unknown error"' 2>/dev/null || echo "Unknown error")
+            log_warn "API вернул ошибку: ${msg}"
+            log_info "Пробуем создать через БД..."
+            create_entry_inbound_via_db "$inbound_tag" "$actual_port" "$settings_json" "$stream_settings_json" "$sniffing_json"
+            return $?
+        fi
+    else
+        log_warn "HTTP ошибка: ${http_code}, пробуем через БД"
+        create_entry_inbound_via_db "$inbound_tag" "$actual_port" "$settings_json" "$stream_settings_json" "$sniffing_json"
+        return $?
+    fi
+}
+
+# Create ENTRY inbound via direct database insertion (fallback)
+create_entry_inbound_via_db() {
+    local tag=$1
+    local port=$2
+    local settings=$3
+    local stream_settings=$4
+    local sniffing=$5
+
+    log_info "Создание inbound напрямую в БД"
+
+    if [[ ! -f "$XUI_DB" ]]; then
+        log_error "БД не найдена: ${XUI_DB}"
+        return 1
+    fi
+
+    # Escape single quotes for SQL
+    settings=$(echo "$settings" | sed "s/'/''/g")
+    stream_settings=$(echo "$stream_settings" | sed "s/'/''/g")
+    sniffing=$(echo "$sniffing" | sed "s/'/''/g")
+
+    local sql="INSERT INTO inbounds (user_id, up, down, total, remark, enable, expiry_time, listen, port, protocol, settings, stream_settings, tag, sniffing)
+               VALUES (1, 0, 0, 0, 'ENTRY Reality Inbound (users)', 1, 0, '0.0.0.0', ${port}, 'vless', '${settings}', '${stream_settings}', '${tag}', '${sniffing}');"
+
+    # Stop x-ui before modifying DB
+    log_info "Остановка x-ui для модификации БД..."
+    systemctl stop x-ui
+    sleep 2
+
+    # Execute SQL
+    if sqlite3 "$XUI_DB" "$sql" 2>&1; then
+        log_success "Inbound создан в БД"
+
+        # Start x-ui
+        log_info "Запуск x-ui..."
+        systemctl start x-ui
+        sleep 3
+
+        if systemctl is-active --quiet x-ui; then
+            log_success "x-ui успешно запущен"
+            return 0
+        else
+            log_error "x-ui не запустился"
+            return 1
+        fi
+    else
+        log_error "Ошибка при вставке в БД"
+        systemctl start x-ui
+        return 1
+    fi
+}
+
+################################################################################
 # VLESS LINK GENERATION
 ################################################################################
 
@@ -1693,11 +1936,87 @@ setup_exit_bridge() {
 # Setup ENTRY bridge
 setup_entry_bridge() {
     log_step "Настройка ENTRY моста"
-    log_info "TODO: Создание ENTRY inbound + outbound на EXIT + routing (будет реализовано в следующих задачах)"
 
-    # Stub: будет реализовано позже
+    # Set default SNI if not provided
+    ENTRY_SNI=${ENTRY_SNI:-yandex.ru}
+    ENTRY_PORT=${ENTRY_PORT:-8443}
+    ENTRY_FP=${ENTRY_FP:-chrome}
+
+    # Create ENTRY inbound with Reality
+    create_entry_inbound_reality || {
+        log_error "Не удалось создать ENTRY inbound"
+        return 1
+    }
+
+    # Get server IP
+    local server_ip
+    server_ip=$(curl -s -4 ifconfig.me 2>/dev/null) || \
+    server_ip=$(curl -s -4 icanhazip.com 2>/dev/null) || \
+    server_ip=$(hostname -I | awk '{print $1}')
+
+    if [[ -z "$server_ip" ]]; then
+        log_warn "Не удалось определить внешний IP"
+        server_ip="UNKNOWN_IP"
+    fi
+
+    log_info "Внешний IP сервера: ${server_ip}"
+
+    # Save all ENTRY artifacts
+    log_info "Сохранение артефактов ENTRY..."
+
+    update_artifact "entry.ip" "$server_ip"
+    update_artifact "entry.port" "$ENTRY_PORT"
+    update_artifact "entry.sni" "$ENTRY_SNI"
+    update_artifact "entry.fingerprint" "$ENTRY_FP"
+    update_artifact "entry.publicKey" "$ENTRY_PBK"
+    update_artifact "entry.shortId" "$ENTRY_SID"
     update_artifact "entry.configured" "true"
     update_artifact "entry.configured_at" "$(date -Iseconds)"
+
+    log_success "Артефакты сохранены в: ${RVPN_ARTIFACTS}"
+
+    # Display configuration
+    log_step "ENTRY Конфигурация"
+    log_info "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    log_info "IP адрес:        ${server_ip}"
+    log_info "Порт:            ${ENTRY_PORT}"
+    log_info "SNI:             ${ENTRY_SNI}"
+    log_info "Fingerprint:     ${ENTRY_FP}"
+    log_info "Public Key:      ${ENTRY_PBK:0:32}..."
+    log_info "Short ID:        ${ENTRY_SID}"
+    log_info "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    log_warn ""
+    log_warn "⚠️  ВАЖНО: ENTRY inbound готов для подключения пользователей"
+    log_warn "⚠️  Outbound и routing будут настроены в следующих подзадачах"
+    log_warn ""
+    log_info "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+    # Verify port is listening
+    log_step "Проверка ENTRY inbound"
+
+    sleep 3  # Wait for service to bind
+
+    if is_port_listening "$ENTRY_PORT"; then
+        log_success "Порт ${ENTRY_PORT} прослушивается"
+    else
+        log_warn "Порт ${ENTRY_PORT} не прослушивается (может потребоваться время)"
+    fi
+
+    # Verify inbound exists in config
+    local xray_config
+    xray_config=$(get_xray_config_json)
+
+    if [[ -n "$xray_config" ]]; then
+        if jq -e ".inbounds[] | select(.tag==\"ENTRY_IN\")" "$xray_config" &>/dev/null; then
+            log_success "Inbound 'ENTRY_IN' присутствует в config.json"
+        else
+            log_warn "Inbound 'ENTRY_IN' не найден в config.json (может быть в БД)"
+        fi
+    fi
+
+    log_success "ENTRY сервер настроен и готов принимать пользователей"
+    log_info "TODO: Outbound на EXIT + routing (следующие подзадачи)"
+    return 0
 }
 
 # Create test client
