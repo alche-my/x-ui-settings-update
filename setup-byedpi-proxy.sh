@@ -13,6 +13,7 @@
 #   --non-ru-port PORT        Non-RU server port (default: 443)
 #   --non-ru-uuid UUID        Non-RU server UUID (required for VLESS)
 #   --byedpi-port PORT        ByeDPI SOCKS5 port (default: 1080)
+#   --generate-uuid           Generate new UUID and exit
 #   --non-interactive         Run without user prompts
 #   --uninstall              Remove ByeDPI installation
 #
@@ -114,6 +115,10 @@ parse_args() {
                 BYEDPI_PORT="$2"
                 shift 2
                 ;;
+            --generate-uuid)
+                echo "$(generate_uuid)"
+                exit 0
+                ;;
             --non-interactive)
                 NON_INTERACTIVE=true
                 shift
@@ -127,7 +132,7 @@ parse_args() {
                 exit 0
                 ;;
             *)
-                log_error "Неизвестная опция: $1"
+                echo -e "${RED}[ERROR]${NC} Неизвестная опция: $1"
                 show_help
                 exit 1
                 ;;
@@ -148,18 +153,38 @@ ${BOLD}Опции:${NC}
     --non-ru-port PORT        Порт Non-RU сервера (по умолчанию: 443)
     --non-ru-uuid UUID        UUID Non-RU сервера для VLESS (обязательно)
     --byedpi-port PORT        Порт SOCKS5 прокси ByeDPI (по умолчанию: 1080)
+    --generate-uuid           Сгенерировать UUID и выйти
     --non-interactive         Запуск без интерактивных запросов
     --uninstall              Удалить установку ByeDPI
     -h, --help               Показать эту справку
 
 ${BOLD}Примеры:${NC}
+    # Сгенерировать UUID
+    $SCRIPT_NAME --generate-uuid
+
     # Установка с параметрами
-    sudo $SCRIPT_NAME --non-ru-ip 1.2.3.4 --non-ru-uuid "your-uuid-here"
+    sudo $SCRIPT_NAME --non-ru-ip 1.2.3.4 --non-ru-uuid "\$(./setup-byedpi-proxy.sh --generate-uuid)"
+
+    # Или в две команды
+    UUID=\$(./setup-byedpi-proxy.sh --generate-uuid)
+    sudo $SCRIPT_NAME --non-ru-ip 1.2.3.4 --non-ru-uuid "\$UUID"
+
+    # Интерактивная установка (скрипт спросит все параметры)
+    sudo $SCRIPT_NAME
 
     # Удаление
     sudo $SCRIPT_NAME --uninstall
 
 EOF
+}
+
+# Generate UUID
+generate_uuid() {
+    if command -v uuidgen &> /dev/null; then
+        uuidgen | tr '[:upper:]' '[:lower:]'
+    else
+        cat /proc/sys/kernel/random/uuid
+    fi
 }
 
 # Interactive prompt for missing parameters
@@ -168,12 +193,36 @@ prompt_params() {
         return
     fi
 
+    echo ""
+    log_info "Интерактивная настройка параметров"
+    echo ""
+
     if [[ -z "$NON_RU_IP" ]]; then
         read -p "Введите IP адрес Non-RU сервера: " NON_RU_IP
     fi
 
     if [[ -z "$NON_RU_UUID" ]]; then
-        read -p "Введите UUID для Non-RU сервера: " NON_RU_UUID
+        echo ""
+        echo -e "${YELLOW}UUID для Non-RU сервера${NC}"
+        echo "Это UUID, который используется на вашем Non-RU сервере для VLESS подключения"
+        echo ""
+        echo "Опции:"
+        echo "  1) Ввести существующий UUID с Non-RU сервера"
+        echo "  2) Сгенерировать новый UUID (затем добавьте его на Non-RU сервер)"
+        echo ""
+        read -p "Выберите [1-2]: " uuid_choice
+
+        if [[ "$uuid_choice" == "2" ]]; then
+            NON_RU_UUID=$(generate_uuid)
+            echo ""
+            log_success "Сгенерирован новый UUID: $NON_RU_UUID"
+            echo ""
+            log_warn "ВАЖНО: Добавьте этот UUID на ваш Non-RU сервер в настройках VLESS!"
+            echo ""
+            read -p "Нажмите Enter для продолжения..."
+        else
+            read -p "Введите UUID с Non-RU сервера: " NON_RU_UUID
+        fi
     fi
 
     read -p "Порт Non-RU сервера [${NON_RU_PORT}]: " input_port
@@ -202,8 +251,14 @@ validate_params() {
     fi
 
     # Validate UUID format
-    if ! [[ "$NON_RU_UUID" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]]; then
+    if ! [[ "$NON_RU_UUID" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ ]]; then
         log_error "Неверный формат UUID: $NON_RU_UUID"
+        echo ""
+        echo -e "${YELLOW}Пример правильного UUID:${NC} $(generate_uuid)"
+        echo ""
+        echo -e "${CYAN}Сгенерировать новый UUID:${NC}"
+        echo "  $SCRIPT_NAME --generate-uuid"
+        echo ""
         exit 1
     fi
 }
