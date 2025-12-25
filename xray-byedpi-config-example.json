@@ -1,0 +1,117 @@
+{
+  "log": {
+    "loglevel": "warning"
+  },
+  "inbounds": [
+    {
+      "tag": "entry-inbound",
+      "port": 443,
+      "protocol": "vless",
+      "settings": {
+        "clients": [
+          {
+            "id": "YOUR-CLIENT-UUID-HERE",
+            "email": "user@example.com"
+          }
+        ],
+        "decryption": "none"
+      },
+      "streamSettings": {
+        "network": "tcp",
+        "security": "tls",
+        "tlsSettings": {
+          "serverName": "your-domain.com",
+          "certificates": [
+            {
+              "certificateFile": "/path/to/cert.crt",
+              "keyFile": "/path/to/cert.key"
+            }
+          ]
+        }
+      },
+      "sniffing": {
+        "enabled": true,
+        "destOverride": ["http", "tls"]
+      }
+    }
+  ],
+  "outbounds": [
+    {
+      "tag": "non-ru-via-byedpi",
+      "protocol": "vless",
+      "settings": {
+        "vnext": [
+          {
+            "address": "NON-RU-SERVER-IP",
+            "port": 443,
+            "users": [
+              {
+                "id": "NON-RU-SERVER-UUID",
+                "encryption": "none",
+                "flow": ""
+              }
+            ]
+          }
+        ]
+      },
+      "streamSettings": {
+        "network": "tcp",
+        "security": "tls",
+        "tlsSettings": {
+          "serverName": "non-ru-server-domain.com",
+          "allowInsecure": false
+        }
+      },
+      "proxySettings": {
+        "tag": "byedpi-socks",
+        "transportLayer": false
+      }
+    },
+    {
+      "tag": "byedpi-socks",
+      "protocol": "socks",
+      "settings": {
+        "servers": [
+          {
+            "address": "127.0.0.1",
+            "port": 1080
+          }
+        ]
+      }
+    },
+    {
+      "tag": "direct",
+      "protocol": "freedom",
+      "settings": {}
+    },
+    {
+      "tag": "blocked",
+      "protocol": "blackhole",
+      "settings": {}
+    }
+  ],
+  "routing": {
+    "domainStrategy": "AsIs",
+    "rules": [
+      {
+        "type": "field",
+        "ip": [
+          "geoip:private"
+        ],
+        "outboundTag": "blocked"
+      },
+      {
+        "type": "field",
+        "protocol": [
+          "bittorrent"
+        ],
+        "outboundTag": "blocked"
+      },
+      {
+        "type": "field",
+        "network": "tcp,udp",
+        "outboundTag": "non-ru-via-byedpi"
+      }
+    ]
+  }
+}
