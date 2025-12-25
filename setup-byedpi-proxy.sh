@@ -197,10 +197,15 @@ prompt_params() {
     log_info "Интерактивная настройка параметров"
     echo ""
 
-    if [[ -z "$NON_RU_IP" ]]; then
+    # Prompt for IP address
+    while [[ -z "$NON_RU_IP" ]]; do
         read -p "Введите IP адрес Non-RU сервера: " NON_RU_IP
-    fi
+        if [[ -z "$NON_RU_IP" ]]; then
+            echo -e "${RED}Ошибка: IP адрес не может быть пустым${NC}"
+        fi
+    done
 
+    # Prompt for UUID
     if [[ -z "$NON_RU_UUID" ]]; then
         echo ""
         echo -e "${YELLOW}UUID для Non-RU сервера${NC}"
@@ -210,7 +215,14 @@ prompt_params() {
         echo "  1) Ввести существующий UUID с Non-RU сервера"
         echo "  2) Сгенерировать новый UUID (затем добавьте его на Non-RU сервер)"
         echo ""
-        read -p "Выберите [1-2]: " uuid_choice
+
+        local uuid_choice
+        while [[ -z "$uuid_choice" || ! "$uuid_choice" =~ ^[12]$ ]]; do
+            read -p "Выберите [1-2]: " uuid_choice
+            if [[ ! "$uuid_choice" =~ ^[12]$ ]]; then
+                echo -e "${RED}Ошибка: Выберите 1 или 2${NC}"
+            fi
+        done
 
         if [[ "$uuid_choice" == "2" ]]; then
             NON_RU_UUID=$(generate_uuid)
@@ -221,7 +233,13 @@ prompt_params() {
             echo ""
             read -p "Нажмите Enter для продолжения..."
         else
-            read -p "Введите UUID с Non-RU сервера: " NON_RU_UUID
+            while [[ -z "$NON_RU_UUID" ]]; do
+                read -p "Введите UUID с Non-RU сервера: " NON_RU_UUID
+                if [[ -z "$NON_RU_UUID" ]]; then
+                    echo -e "${RED}Ошибка: UUID не может быть пустым${NC}"
+                    echo "Пример: $(generate_uuid)"
+                fi
+            done
         fi
     fi
 
