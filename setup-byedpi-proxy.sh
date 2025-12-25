@@ -211,36 +211,16 @@ prompt_params() {
         echo -e "${YELLOW}UUID для Non-RU сервера${NC}"
         echo "Это UUID, который используется на вашем Non-RU сервере для VLESS подключения"
         echo ""
-        echo "Опции:"
-        echo "  1) Ввести существующий UUID с Non-RU сервера"
-        echo "  2) Сгенерировать новый UUID (затем добавьте его на Non-RU сервер)"
-        echo ""
 
-        local uuid_choice
-        while [[ -z "$uuid_choice" || ! "$uuid_choice" =~ ^[12]$ ]]; do
-            read -p "Выберите [1-2]: " uuid_choice
-            if [[ ! "$uuid_choice" =~ ^[12]$ ]]; then
-                echo -e "${RED}Ошибка: Выберите 1 или 2${NC}"
+        while [[ -z "$NON_RU_UUID" ]]; do
+            read -p "Введите UUID с Non-RU сервера: " NON_RU_UUID
+            if [[ -z "$NON_RU_UUID" ]]; then
+                echo -e "${RED}Ошибка: UUID не может быть пустым${NC}"
+                echo ""
+                echo -e "${CYAN}Сгенерировать UUID:${NC} $SCRIPT_NAME --generate-uuid"
+                echo ""
             fi
         done
-
-        if [[ "$uuid_choice" == "2" ]]; then
-            NON_RU_UUID=$(generate_uuid)
-            echo ""
-            log_success "Сгенерирован новый UUID: $NON_RU_UUID"
-            echo ""
-            log_warn "ВАЖНО: Добавьте этот UUID на ваш Non-RU сервер в настройках VLESS!"
-            echo ""
-            read -p "Нажмите Enter для продолжения..."
-        else
-            while [[ -z "$NON_RU_UUID" ]]; do
-                read -p "Введите UUID с Non-RU сервера: " NON_RU_UUID
-                if [[ -z "$NON_RU_UUID" ]]; then
-                    echo -e "${RED}Ошибка: UUID не может быть пустым${NC}"
-                    echo "Пример: $(generate_uuid)"
-                fi
-            done
-        fi
     fi
 
     read -p "Порт Non-RU сервера [${NON_RU_PORT}]: " input_port
