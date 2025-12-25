@@ -73,11 +73,14 @@ for i in $(seq 1 $server_count); do
     # IP
     while true; do
         read -p "IP адрес сервера #$i: " ip
-        if [[ "$ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+        if [[ -z "$ip" ]]; then
+            echo -e "${RED}Ошибка: IP адрес не может быть пустым${NC}"
+        elif [[ "$ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             server_ips+=("$ip")
             break
         else
-            echo -e "${RED}Некорректный IP адрес${NC}"
+            echo -e "${RED}Некорректный формат IP адреса${NC}"
+            echo "Пример: 185.1.2.3"
         fi
     done
 
@@ -89,11 +92,20 @@ for i in $(seq 1 $server_count); do
     # UUID
     while true; do
         read -p "UUID сервера #$i: " uuid
-        if [[ "$uuid" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ ]]; then
+        if [[ -z "$uuid" ]]; then
+            echo -e "${RED}Ошибка: UUID не может быть пустым${NC}"
+            echo ""
+            echo -e "${CYAN}Сгенерировать UUID:${NC} ./setup-byedpi-proxy.sh --generate-uuid"
+            echo ""
+        elif [[ "$uuid" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ ]]; then
             server_uuids+=("$uuid")
             break
         else
-            echo -e "${RED}Некорректный UUID${NC}"
+            echo -e "${RED}Некорректный формат UUID${NC}"
+            echo "Пример: a1b2c3d4-e5f6-7890-1234-567890abcdef"
+            echo ""
+            echo -e "${CYAN}Сгенерировать UUID:${NC} ./setup-byedpi-proxy.sh --generate-uuid"
+            echo ""
         fi
     done
 
