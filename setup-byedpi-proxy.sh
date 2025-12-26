@@ -199,7 +199,7 @@ prompt_params() {
 
     # Prompt for IP address
     while [[ -z "$NON_RU_IP" ]]; do
-        read -p "Введите IP адрес Non-RU сервера: " NON_RU_IP
+        read -p "Введите IP адрес Non-RU сервера: " NON_RU_IP </dev/tty
         if [[ -z "$NON_RU_IP" ]]; then
             echo -e "${RED}Ошибка: IP адрес не может быть пустым${NC}"
         fi
@@ -213,7 +213,7 @@ prompt_params() {
         echo ""
 
         while [[ -z "$NON_RU_UUID" ]]; do
-            read -p "Введите UUID с Non-RU сервера: " NON_RU_UUID
+            read -p "Введите UUID с Non-RU сервера: " NON_RU_UUID </dev/tty
             if [[ -z "$NON_RU_UUID" ]]; then
                 echo -e "${RED}Ошибка: UUID не может быть пустым${NC}"
                 echo ""
@@ -223,10 +223,10 @@ prompt_params() {
         done
     fi
 
-    read -p "Порт Non-RU сервера [${NON_RU_PORT}]: " input_port
+    read -p "Порт Non-RU сервера [${NON_RU_PORT}]: " input_port </dev/tty
     NON_RU_PORT="${input_port:-$NON_RU_PORT}"
 
-    read -p "Порт SOCKS5 прокси ByeDPI [${BYEDPI_PORT}]: " input_byedpi
+    read -p "Порт SOCKS5 прокси ByeDPI [${BYEDPI_PORT}]: " input_byedpi </dev/tty
     BYEDPI_PORT="${input_byedpi:-$BYEDPI_PORT}"
 }
 

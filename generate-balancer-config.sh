@@ -47,7 +47,7 @@ echo ""
 
 # Prompt for number of servers
 echo -e "${YELLOW}Сколько Non-RU серверов вы хотите добавить в балансировщик?${NC}"
-read -p "Количество серверов [3]: " server_count
+read -p "Количество серверов [3]: " server_count </dev/tty
 server_count=${server_count:-3}
 
 # Validate number
@@ -72,7 +72,7 @@ for i in $(seq 1 $server_count); do
 
     # IP
     while true; do
-        read -p "IP адрес сервера #$i: " ip
+        read -p "IP адрес сервера #$i: " ip </dev/tty
         if [[ -z "$ip" ]]; then
             echo -e "${RED}Ошибка: IP адрес не может быть пустым${NC}"
         elif [[ "$ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
@@ -85,13 +85,13 @@ for i in $(seq 1 $server_count); do
     done
 
     # Port
-    read -p "Порт сервера #$i [443]: " port
+    read -p "Порт сервера #$i [443]: " port </dev/tty
     port=${port:-443}
     server_ports+=("$port")
 
     # UUID
     while true; do
-        read -p "UUID сервера #$i: " uuid
+        read -p "UUID сервера #$i: " uuid </dev/tty
         if [[ -z "$uuid" ]]; then
             echo -e "${RED}Ошибка: UUID не может быть пустым${NC}"
             echo ""
@@ -120,7 +120,7 @@ echo -e "${YELLOW}Стратегия балансировки:${NC}"
 echo "  1) random   - случайный выбор сервера"
 echo "  2) leastPing - выбор сервера с наименьшим пингом"
 echo "  3) leastLoad - выбор наименее загруженного сервера"
-read -p "Выберите стратегию [1-3]: " strategy_choice
+read -p "Выберите стратегию [1-3]: " strategy_choice </dev/tty
 
 case "$strategy_choice" in
     2)
