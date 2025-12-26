@@ -317,7 +317,7 @@ generate_full_config() {
     mkdir -p "$CONFIG_OUTPUT_DIR"
 
     # Build outbounds array
-    local outbounds='['
+    outbounds='['
 
     # Direct outbound
     outbounds+='
@@ -332,7 +332,7 @@ generate_full_config() {
     },'
 
     # Blocked outbound
-    outbounds+'
+    outbounds+='
     {
       "tag": "blocked",
       "protocol": "blackhole",
@@ -357,12 +357,12 @@ generate_full_config() {
 
     # Non-RU server outbounds
     for i in $(seq 0 $((server_count - 1))); do
-        local network="${server_networks[$i]}"
-        local security="${server_securities[$i]}"
-        local flow="${server_flows[$i]}"
+        network="${server_networks[$i]}"
+        security="${server_securities[$i]}"
+        flow="${server_flows[$i]}"
 
         # Build streamSettings based on network type
-        local stream_settings='
+        stream_settings='
         "network": "'$network'",
         "security": "'$security'"'
 
@@ -440,10 +440,10 @@ generate_full_config() {
   ]'
 
     # Build routing rules
-    local routing_rules='['
+    routing_rules='['
 
     # API rule
-    routing_rules+'
+    routing_rules+='
       {
         "type": "field",
         "inboundTag": ["api"],
@@ -469,7 +469,7 @@ generate_full_config() {
     # Main routing rule
     if [[ $server_count -gt 1 ]]; then
         # Multiple servers: use balancer
-        routing_rules+'
+        routing_rules+='
       {
         "type": "field",
         "network": "TCP,UDP",
@@ -477,7 +477,7 @@ generate_full_config() {
       }'
     else
         # Single server: direct routing
-        routing_rules+'
+        routing_rules+='
       {
         "type": "field",
         "network": "TCP,UDP",
@@ -485,13 +485,13 @@ generate_full_config() {
       }'
     fi
 
-    routing_rules+'
+    routing_rules+='
     ]'
 
     # Build balancers (only if multiple servers)
-    local balancers=''
+    balancers=''
     if [[ $server_count -gt 1 ]]; then
-        local selector='['
+        selector='['
         for i in $(seq 0 $((server_count - 1))); do
             [[ $i -gt 0 ]] && selector+=', '
             selector+='"'${server_tags[$i]}'"'
