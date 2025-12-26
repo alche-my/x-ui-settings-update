@@ -3,6 +3,16 @@
 ################################################################################
 # Auto ByeDPI Setup & Strategy Testing
 # Автоматическая установка ByeDPI и подбор лучшей стратегии
+#
+# Usage:
+#   Вариант 1 (с аргументом):
+#     curl -fsSL https://...auto-setup-byedpi.sh -o setup.sh
+#     chmod +x setup.sh
+#     sudo ./setup.sh 45.12.135.9
+#
+#   Вариант 2 (без аргумента):
+#     sudo bash auto-setup-byedpi.sh
+#
 ################################################################################
 
 set -e
@@ -118,8 +128,27 @@ echo ""
 echo -e "${YELLOW}[5/5]${NC} Тестирование стратегий обхода DPI..."
 echo ""
 
-# Получить адрес Non-RU сервера
-read -p "Введите IP вашего Non-RU сервера (например, 45.12.135.9): " NON_RU_SERVER
+# Получить адрес Non-RU сервера из аргумента или запросить
+if [[ -n "${1:-}" ]]; then
+    NON_RU_SERVER="$1"
+    echo "Используем адрес из аргумента: $NON_RU_SERVER"
+else
+    # Попробовать прочитать из /dev/tty для работы через pipe
+    if [[ -t 0 ]]; then
+        read -p "Введите IP вашего Non-RU сервера (например, 45.12.135.9): " NON_RU_SERVER
+    else
+        read -p "Введите IP вашего Non-RU сервера (например, 45.12.135.9): " NON_RU_SERVER </dev/tty || {
+            echo -e "${RED}[ERROR]${NC} Не удалось прочитать ввод"
+            echo ""
+            echo "Запустите так:"
+            echo "  curl -fsSL https://...auto-setup-byedpi.sh -o setup.sh && chmod +x setup.sh && sudo ./setup.sh 45.12.135.9"
+            echo ""
+            echo "Или:"
+            echo "  sudo bash auto-setup-byedpi.sh 45.12.135.9"
+            exit 1
+        }
+    fi
+fi
 
 if [[ -z "$NON_RU_SERVER" ]]; then
     echo -e "${RED}[ERROR]${NC} Адрес не может быть пустым"
@@ -258,7 +287,11 @@ echo -e "${GREEN}[ЛУЧШАЯ СТРАТЕГИЯ]${NC} $BEST_STRATEGY ($BEST_RA
 echo "Параметры: ${STRATEGIES[$BEST_STRATEGY]}"
 echo ""
 
-read -p "Применить эту стратегию? [Y/n]: " APPLY
+if [[ -t 0 ]]; then
+    read -p "Применить эту стратегию? [Y/n]: " APPLY
+else
+    read -p "Применить эту стратегию? [Y/n]: " APPLY </dev/tty
+fi
 
 if [[ ! "$APPLY" =~ ^[Nn]$ ]]; then
     # Обновить systemd сервис
