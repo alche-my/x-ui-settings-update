@@ -14,7 +14,26 @@
 
 ---
 
-## 🚀 Быстрый старт (3 команды)
+## 🚀 Быстрый старт (ОДНА КОМАНДА!)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/alche-my/x-ui-settings-update/claude/byedpi-3xui-compatibility-ihDW2/install-byedpi-3xui.sh -o install-byedpi-3xui.sh && chmod +x install-byedpi-3xui.sh && sudo ./install-byedpi-3xui.sh
+```
+
+**Что делает:**
+1. Устанавливает ByeDPI
+2. Собирает данные о серверах
+3. Генерирует **полный** JSON конфиг для 3x-ui (включает все секции: log, api, inbounds, outbounds, routing, policy, stats, metrics)
+4. Выводит готовый JSON - скопируйте его в 3x-ui панель → Xray Configs
+
+**Результат:** Готовый JSON для copy-paste в панель! 🎯
+
+---
+
+### Старый способ (3 скрипта - устарел)
+
+<details>
+<summary>Показать старый способ с тремя скриптами</summary>
 
 ```bash
 # 1. Установить ByeDPI
@@ -26,6 +45,8 @@ curl -fsSL https://raw.githubusercontent.com/alche-my/x-ui-settings-update/claud
 # 3. Применить автоматически
 curl -fsSL https://raw.githubusercontent.com/alche-my/x-ui-settings-update/claude/byedpi-3xui-compatibility-ihDW2/apply-config-to-3xui.sh | sudo bash
 ```
+
+</details>
 
 ---
 
