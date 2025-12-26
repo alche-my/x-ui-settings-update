@@ -11,19 +11,32 @@ curl -fsSL https://raw.githubusercontent.com/alche-my/x-ui-settings-update/claud
 1. **Количество Non-RU серверов** (например: 3)
 
 2. **Для каждого сервера:**
-   - IP адрес
-   - Порт (Enter = 443)
-   - UUID
-   - Public Key (Enter = значение по умолчанию)
-   - Short ID (Enter = значение по умолчанию)
-   - SNI (Enter = github.com)
-   - Fingerprint (Enter = edge)
-   - gRPC Service Name (Enter = svc)
+   - vless:// ссылку (просто вставьте - всё распарсится автоматически!)
 
 3. **Стратегию балансировки** (если серверов >1):
    - 1 = random (рекомендуется)
    - 2 = leastPing
    - 3 = leastLoad
+
+**Всё!** IP, UUID, Public Key, SNI, fingerprint, service name - всё автоматически извлекается из vless:// ссылки! 🎯
+
+### Пример vless:// ссылки
+
+```
+vless://206b7a77-6295-4f2b-999a-125db3982084@45.12.135.9:443?type=grpc&security=reality&pbk=Q_KUAYTAc05sE4CbLnq9vznhan1o4zzAsUwTHPVc9nM&fp=edge&sni=github.com&sid=6d12731746e56ad2&serviceName=svc#Server1
+```
+
+Скрипт автоматически извлечет:
+- UUID: `206b7a77-6295-4f2b-999a-125db3982084`
+- IP: `45.12.135.9`
+- Порт: `443`
+- Тип: `grpc`
+- Безопасность: `reality`
+- Public Key: `Q_KUAYTAc05sE4CbLnq9vznhan1o4zzAsUwTHPVc9nM`
+- Fingerprint: `edge`
+- SNI: `github.com`
+- Short ID: `6d12731746e56ad2`
+- Service Name: `svc`
 
 ## ✅ После установки
 

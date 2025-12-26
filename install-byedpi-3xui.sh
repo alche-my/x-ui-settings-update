@@ -134,6 +134,71 @@ EOF
     fi
 }
 
+url_decode() {
+    local url_encoded="${1//+/ }"
+    printf '%b' "${url_encoded//%/\\x}"
+}
+
+parse_vless_url() {
+    local vless_url="$1"
+
+    # Remove vless:// prefix
+    vless_url="${vless_url#vless://}"
+
+    # Extract UUID (before @)
+    local uuid="${vless_url%%@*}"
+
+    # Extract rest (after @)
+    local rest="${vless_url#*@}"
+
+    # Extract IP:PORT (before ?)
+    local address_port="${rest%%\?*}"
+    local address="${address_port%:*}"
+    local port="${address_port##*:}"
+
+    # Extract parameters (after ? and before #)
+    local params="${rest#*\?}"
+    params="${params%%\#*}"
+
+    # Extract tag (after #)
+    local tag=""
+    if [[ "$rest" == *"#"* ]]; then
+        tag="${rest##*\#}"
+        tag=$(url_decode "$tag")
+    fi
+
+    # Parse parameters
+    local network="tcp"
+    local security="none"
+    local pbk=""
+    local fp="chrome"
+    local sni=""
+    local sid=""
+    local service_name=""
+    local flow=""
+
+    IFS='&' read -ra PARAMS <<< "$params"
+    for param in "${PARAMS[@]}"; do
+        key="${param%%=*}"
+        value="${param#*=}"
+        value=$(url_decode "$value")
+
+        case "$key" in
+            type) network="$value" ;;
+            security) security="$value" ;;
+            pbk) pbk="$value" ;;
+            fp) fp="$value" ;;
+            sni) sni="$value" ;;
+            sid) sid="$value" ;;
+            serviceName) service_name="$value" ;;
+            flow) flow="$value" ;;
+        esac
+    done
+
+    # Export parsed values
+    echo "$uuid|$address|$port|$network|$security|$pbk|$fp|$sni|$sid|$service_name|$flow|$tag"
+}
+
 collect_server_info() {
     log_step "Сбор информации о Non-RU серверах..."
 
@@ -150,69 +215,78 @@ collect_server_info() {
     declare -g -a server_ips
     declare -g -a server_ports
     declare -g -a server_uuids
+    declare -g -a server_networks
+    declare -g -a server_securities
     declare -g -a server_public_keys
     declare -g -a server_short_ids
     declare -g -a server_sni
     declare -g -a server_fingerprints
     declare -g -a server_service_names
+    declare -g -a server_flows
     declare -g -a server_tags
 
     for i in $(seq 1 $server_count); do
         echo ""
         echo -e "${CYAN}${BOLD}=== Сервер #$i ===${NC}"
 
-        # IP
         while true; do
-            read -p "IP адрес: " ip </dev/tty
-            if [[ -z "$ip" ]]; then
-                log_error "IP адрес не может быть пустым"
-            elif [[ "$ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-                server_ips+=("$ip")
-                break
-            else
-                log_error "Некорректный формат IP адреса"
+            echo ""
+            echo -e "${YELLOW}Вставьте vless:// ссылку для сервера #$i:${NC}"
+            read -p "> " vless_url </dev/tty
+
+            if [[ -z "$vless_url" ]]; then
+                log_error "Ссылка не может быть пустой"
+                continue
             fi
-        done
 
-        # Port
-        read -p "Порт [443]: " port </dev/tty
-        port=${port:-443}
-        server_ports+=("$port")
+            if [[ ! "$vless_url" =~ ^vless:// ]]; then
+                log_error "Ссылка должна начинаться с vless://"
+                continue
+            fi
 
-        # UUID
-        while true; do
-            read -p "UUID: " uuid </dev/tty
-            if [[ -z "$uuid" ]]; then
-                log_error "UUID не может быть пустым"
-            elif [[ "$uuid" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ ]]; then
+            # Parse vless URL
+            parsed=$(parse_vless_url "$vless_url")
+
+            IFS='|' read -r uuid ip port network security pbk fp sni sid service_name flow tag <<< "$parsed"
+
+            if [[ -z "$uuid" ]] || [[ -z "$ip" ]] || [[ -z "$port" ]]; then
+                log_error "Не удалось распарсить ссылку"
+                continue
+            fi
+
+            # Display parsed info
+            echo ""
+            log_success "Ссылка успешно распознана:"
+            echo "  IP: $ip"
+            echo "  Порт: $port"
+            echo "  UUID: $uuid"
+            echo "  Тип: $network"
+            echo "  Безопасность: $security"
+            [[ -n "$pbk" ]] && echo "  Public Key: ${pbk:0:20}..."
+            [[ -n "$sni" ]] && echo "  SNI: $sni"
+            [[ -n "$fp" ]] && echo "  Fingerprint: $fp"
+            [[ -n "$sid" ]] && echo "  Short ID: $sid"
+            [[ -n "$service_name" ]] && echo "  Service Name: $service_name"
+            [[ -n "$flow" ]] && echo "  Flow: $flow"
+            echo ""
+
+            read -p "Использовать эти настройки? [Y/n]: " confirm </dev/tty
+            if [[ ! "$confirm" =~ ^[Nn]$ ]]; then
                 server_uuids+=("$uuid")
+                server_ips+=("$ip")
+                server_ports+=("$port")
+                server_networks+=("$network")
+                server_securities+=("$security")
+                server_public_keys+=("$pbk")
+                server_fingerprints+=("$fp")
+                server_sni+=("$sni")
+                server_short_ids+=("$sid")
+                server_service_names+=("$service_name")
+                server_flows+=("$flow")
+                server_tags+=("${tag:-non-ru-${i}-via-byedpi}")
                 break
-            else
-                log_error "Некорректный формат UUID"
             fi
         done
-
-        # Reality settings
-        echo ""
-        echo -e "${YELLOW}Reality настройки (оставьте пустым для значений по умолчанию):${NC}"
-
-        read -p "Public Key [auto]: " public_key </dev/tty
-        server_public_keys+=("${public_key:-Q_KUAYTAc05sE4CbLnq9vznhan1o4zzAsUwTHPVc9nM}")
-
-        read -p "Short ID [auto]: " short_id </dev/tty
-        server_short_ids+=("${short_id:-6d12731746e56ad2}")
-
-        read -p "SNI/Server Name [github.com]: " sni </dev/tty
-        server_sni+=("${sni:-github.com}")
-
-        read -p "Fingerprint [edge]: " fingerprint </dev/tty
-        server_fingerprints+=("${fingerprint:-edge}")
-
-        # gRPC settings
-        read -p "gRPC Service Name [svc]: " service_name </dev/tty
-        server_service_names+=("${service_name:-svc}")
-
-        server_tags+=("non-ru-${i}-via-byedpi")
     done
 
     # Balancing strategy (only if multiple servers)
@@ -283,20 +357,18 @@ generate_full_config() {
 
     # Non-RU server outbounds
     for i in $(seq 0 $((server_count - 1))); do
-        outbounds+=',
-    {
-      "protocol": "vless",
-      "settings": {
-        "address": "'${server_ips[$i]}'",
-        "port": '${server_ports[$i]}',
-        "id": "'${server_uuids[$i]}'",
-        "flow": "",
-        "encryption": "none"
-      },
-      "tag": "'${server_tags[$i]}'",
-      "streamSettings": {
-        "network": "grpc",
-        "security": "reality",
+        local network="${server_networks[$i]}"
+        local security="${server_securities[$i]}"
+        local flow="${server_flows[$i]}"
+
+        # Build streamSettings based on network type
+        local stream_settings='
+        "network": "'$network'",
+        "security": "'$security'"'
+
+        # Add security settings
+        if [[ "$security" == "reality" ]]; then
+            stream_settings+=',
         "realitySettings": {
           "publicKey": "'${server_public_keys[$i]}'",
           "fingerprint": "'${server_fingerprints[$i]}'",
@@ -304,12 +376,41 @@ generate_full_config() {
           "shortId": "'${server_short_ids[$i]}'",
           "spiderX": "/",
           "mldsa65Verify": ""
-        },
+        }'
+        elif [[ "$security" == "tls" ]]; then
+            stream_settings+=',
+        "tlsSettings": {
+          "serverName": "'${server_sni[$i]}'",
+          "fingerprint": "'${server_fingerprints[$i]}'",
+          "allowInsecure": false
+        }'
+        fi
+
+        # Add network-specific settings
+        if [[ "$network" == "grpc" ]]; then
+            stream_settings+=',
         "grpcSettings": {
           "serviceName": "'${server_service_names[$i]}'",
           "authority": "",
           "multiMode": false
-        },
+        }'
+        elif [[ "$network" == "ws" ]]; then
+            stream_settings+=',
+        "wsSettings": {
+          "path": "/",
+          "headers": {}
+        }'
+        elif [[ "$network" == "tcp" ]]; then
+            stream_settings+=',
+        "tcpSettings": {
+          "header": {
+            "type": "none"
+          }
+        }'
+        fi
+
+        # Add sockopt with dialerProxy
+        stream_settings+=',
         "sockopt": {
           "dialerProxy": "byedpi-socks",
           "tcpFastOpen": false,
@@ -317,7 +418,20 @@ generate_full_config() {
           "tcpMptcp": false,
           "penetrate": false,
           "addressPortStrategy": "none"
-        }
+        }'
+
+        outbounds+=',
+    {
+      "protocol": "vless",
+      "settings": {
+        "address": "'${server_ips[$i]}'",
+        "port": '${server_ports[$i]}',
+        "id": "'${server_uuids[$i]}'",
+        "flow": "'$flow'",
+        "encryption": "none"
+      },
+      "tag": "'${server_tags[$i]}'",
+      "streamSettings": {'$stream_settings'
       }
     }'
     done
@@ -485,13 +599,16 @@ show_final_instructions() {
     echo "5. Нажмите Save и Restart Xray"
     echo ""
 
-    log_info "⚠️  ВАЖНО: Добавьте UUID на каждый Non-RU сервер!"
+    log_info "📝 Информация о серверах:"
     echo ""
     for i in $(seq 0 $((server_count - 1))); do
-        echo "  Сервер #$((i+1)): ${server_ips[$i]}"
+        echo "  Сервер #$((i+1)): ${server_ips[$i]}:${server_ports[$i]}"
         echo "  UUID: ${server_uuids[$i]}"
+        echo "  Тип: ${server_networks[$i]}, Безопасность: ${server_securities[$i]}"
         echo ""
     done
+    echo ""
+    log_warn "⚠️  ВАЖНО: Убедитесь, что эти UUID уже добавлены на Non-RU серверах!"
 
     log_info "🔧 Проверка:"
     echo -e "${YELLOW}sudo systemctl status byedpi${NC}"
