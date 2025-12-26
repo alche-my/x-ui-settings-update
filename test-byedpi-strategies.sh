@@ -1,11 +1,12 @@
 #!/bin/bash
 
 ################################################################################
-# ByeDPI Strategy Auto-Selector
+# ByeDPI Strategy Auto-Selector v2.0
 #
 # Автоматически тестирует разные стратегии обхода DPI и выбирает лучшую
+# Использует правильный синтаксис ciadpi (не мобильного приложения!)
 #
-# Usage: sudo ./test-byedpi-strategies.sh
+# Usage: sudo ./test-byedpi-strategies.sh <non-ru-server-ip>
 ################################################################################
 
 set -e
@@ -38,6 +39,12 @@ log_step() {
     echo -e "${CYAN}${BOLD}==>${NC} $*"
 }
 
+log_debug() {
+    if [[ "${DEBUG:-0}" == "1" ]]; then
+        echo -e "${BLUE}[DEBUG]${NC} $*"
+    fi
+}
+
 check_root() {
     if [[ $EUID -ne 0 ]]; then
         log_error "Этот скрипт должен быть запущен с правами root"
@@ -45,114 +52,195 @@ check_root() {
     fi
 }
 
-# Проверка наличия ByeDPI
 check_byedpi() {
     if ! command -v ciadpi &> /dev/null; then
         log_error "ByeDPI не установлен. Запустите install-byedpi-3xui.sh сначала"
         exit 1
     fi
+
+    log_debug "ByeDPI найден: $(which ciadpi)"
 }
 
-# Список стратегий для тестирования (без --tlsrec для совместимости с Reality)
+# Правильные стратегии для ciadpi (НЕ из мобильного приложения!)
+# Источник: https://github.com/hufrea/byedpi
 declare -A STRATEGIES=(
-    # Стратегия из мобильного приложения (90% success)
-    ["google-ttl-mss"]="--ip 127.0.0.1 --port 1080 -n google.com -Qr -f-204 -s1.5+sm -a1 -As -d1 -s3+s -s5+s -q7 -a1 -As -o2 -f-43 -a1 -As -r5 -Mh -s1:5+s -s3:7+sm -a1"
+    # Базовая (текущая)
+    ["basic"]="--disorder 1 --auto=torst"
 
-    # OOB + множественные разделения (47% success)
-    ["oob-multi-split"]="--ip 127.0.0.1 --port 1080 -o1 -d1 -a1 -At,r,s -s1 -d1 -s5+s -s10+s -s15+s -s20+s -r1+s -S -a1"
+    # С OOB (Out-Of-Band)
+    ["oob-basic"]="--oob 1 --disorder 1 --auto=torst"
 
-    # Множественные позиции (42% success)
-    ["multi-position"]="--ip 127.0.0.1 --port 1080 -d1 -d3+s -s6+s -d9+s -s12+s -d15+s -s20+s -d25+s -s30+s -d35+s -r1+s -S -a1"
+    # Split + disorder
+    ["split-disorder"]="--split 1 --disorder 3 --auto=torst"
 
-    # Большие позиции + TTL (38% success)
-    ["large-positions"]="--ip 127.0.0.1 --port 1080 -d1+s -s50+s -a1 -As -f20 -r2+s -a1 -At -d2 -s1+s -s5+s -s10+s -s15+s -s25+s -s35+s -s50+s -s60+s -a1"
+    # Split в разных позициях
+    ["split-pos2"]="--split 2 --disorder 1"
 
-    # OOB + google.com (33% success)
-    ["oob-google"]="--ip 127.0.0.1 --port 1080 -o1 -a1 -At,r,s -f-1 -a1 -At,r,s -d1:11+sm -S -a1 -At,r,s -n google.com -Qr -f1 -d1:11+sm -s1:11+sm -S -a1"
+    ["split-pos3"]="--split 3 --disorder 2"
 
-    # Упрощенная (совместимая с Reality)
-    ["simple-reality"]="--ip 127.0.0.1 --port 1080 -o2 -a1 -s1 -s3+s -s5+s -d1 -r2+s"
+    # Fake packets (без TTL для совместимости)
+    ["fake-basic"]="--fake 1 --disorder 2"
 
-    # Текущая (базовая)
-    ["current-basic"]="--ip 127.0.0.1 --port 1080 --oob 1 --disorder 1 --auto=torst"
+    ["fake-advanced"]="--fake 2 --split 1 --disorder 1"
 
-    # Агрессивная (без TTL)
-    ["aggressive"]="--ip 127.0.0.1 --port 1080 -o2 -d1 -s1 -s2+s -s3+s -s5+s -s10+s -r3+s -a1 -As"
+    # TTL manipulation (осторожно!)
+    ["ttl-low"]="--ttl 5 --disorder 1"
 
-    # Минималистичная
-    ["minimal"]="--ip 127.0.0.1 --port 1080 -o1 -d1 -s5+s"
+    ["ttl-high"]="--ttl 128 --split 1"
+
+    # HTTP modification
+    ["mod-http"]="--mod-http=h,d --split 1 --disorder 1"
+
+    # Комбинированные
+    ["combo-light"]="--oob 1 --split 1 --disorder 1"
+
+    ["combo-medium"]="--oob 1 --split 2 --disorder 2 --fake 1"
+
+    ["combo-heavy"]="--split 3 --disorder 3 --fake 2 --mod-http=h,d"
+
+    # Агрессивная
+    ["aggressive"]="--oob 1 --split 1 --disorder 3 --fake 2 --auto=torst"
 )
 
-# Функция для запуска ByeDPI с заданными параметрами
-start_byedpi_with_params() {
-    local params="$1"
-
-    # Остановить текущий процесс
+# Остановить все процессы ciadpi
+stop_byedpi() {
     pkill -9 ciadpi 2>/dev/null || true
     sleep 1
+    log_debug "Все процессы ciadpi остановлены"
+}
 
-    # Запустить с новыми параметрами в фоне
-    eval "/usr/local/bin/ciadpi $params" &>/dev/null &
+# Запустить ByeDPI с заданными параметрами
+start_byedpi_with_params() {
+    local strategy_name="$1"
+    local params="$2"
+
+    stop_byedpi
+
+    local full_cmd="/usr/local/bin/ciadpi --ip 127.0.0.1 --port 1080 $params"
+
+    log_debug "Запуск: $full_cmd"
+
+    # Запустить в фоне и сохранить PID
+    $full_cmd &>/tmp/byedpi-${strategy_name}.log &
     local pid=$!
 
     sleep 2
 
     # Проверить, что процесс запущен
     if ! kill -0 $pid 2>/dev/null; then
+        log_debug "Процесс завершился. Лог:"
+        cat /tmp/byedpi-${strategy_name}.log 2>/dev/null || echo "Нет лога"
         return 1
     fi
 
+    # Проверить, что порт слушается
+    if ! ss -tln 2>/dev/null | grep -q ":1080 "; then
+        log_debug "Порт 1080 не прослушивается"
+        kill -9 $pid 2>/dev/null || true
+        return 1
+    fi
+
+    log_debug "ByeDPI запущен с PID $pid"
     return 0
 }
 
-# Функция для тестирования соединения через ByeDPI
-test_connection() {
+# Тестирование соединения через SOCKS5
+test_socks5_connection() {
     local test_url="$1"
     local attempts=3
     local success=0
+    local timeout=10
 
     for i in $(seq 1 $attempts); do
-        if timeout 10 curl --socks5 127.0.0.1:1080 -s -o /dev/null -w "%{http_code}" "$test_url" 2>/dev/null | grep -q "200"; then
+        log_debug "Попытка $i/$attempts: curl --socks5 127.0.0.1:1080 $test_url"
+
+        local http_code
+        http_code=$(timeout $timeout curl --socks5 127.0.0.1:1080 \
+            -s -o /dev/null -w "%{http_code}" \
+            --connect-timeout 5 \
+            --max-time $timeout \
+            "$test_url" 2>/dev/null || echo "000")
+
+        log_debug "HTTP код: $http_code"
+
+        if [[ "$http_code" == "200" ]] || [[ "$http_code" == "301" ]] || [[ "$http_code" == "302" ]]; then
             ((success++))
+            log_debug "Успех!"
+        else
+            log_debug "Неудача (код $http_code)"
         fi
+
         sleep 1
     done
 
     # Процент успешности
-    echo $((success * 100 / attempts))
+    local percent=$((success * 100 / attempts))
+    log_debug "Успешность: $success/$attempts ($percent%)"
+    echo $percent
 }
 
 # Основная функция тестирования
 test_strategies() {
     local test_server="$1"
-    local test_url="https://${test_server}"
+
+    # Определить URL для тестирования
+    local test_urls=(
+        "https://www.google.com"
+        "https://ifconfig.me"
+        "https://$test_server"
+    )
 
     echo ""
     log_step "Начинаем тестирование стратегий..."
+    log_info "Non-RU сервер: $test_server"
+    log_info "Стратегий для тестирования: ${#STRATEGIES[@]}"
     echo ""
 
     declare -A results
+    local test_count=0
 
     for strategy_name in "${!STRATEGIES[@]}"; do
-        echo -e "${YELLOW}Тестирование: $strategy_name${NC}"
+        ((test_count++))
+        echo -e "${CYAN}[$test_count/${#STRATEGIES[@]}]${NC} ${YELLOW}Тестирование: ${BOLD}$strategy_name${NC}"
+        echo -e "  Параметры: ${STRATEGIES[$strategy_name]}"
 
         # Запустить ByeDPI с параметрами стратегии
-        if ! start_byedpi_with_params "${STRATEGIES[$strategy_name]}"; then
-            log_error "Не удалось запустить ByeDPI с параметрами $strategy_name"
+        if ! start_byedpi_with_params "$strategy_name" "${STRATEGIES[$strategy_name]}"; then
+            log_error "  ✗ Не удалось запустить ByeDPI"
             results[$strategy_name]=0
+            echo ""
             continue
         fi
 
-        # Протестировать соединение
-        success_rate=$(test_connection "$test_url")
-        results[$strategy_name]=$success_rate
+        # Протестировать соединения
+        local total_success=0
+        local url_count=0
 
-        echo -e "${CYAN}  Результат: ${success_rate}% успешных соединений${NC}"
+        for url in "${test_urls[@]}"; do
+            log_debug "Тестирую URL: $url"
+            local success_rate=$(test_socks5_connection "$url")
+            total_success=$((total_success + success_rate))
+            ((url_count++))
+        done
+
+        # Средний процент успешности
+        local avg_success=$((total_success / url_count))
+        results[$strategy_name]=$avg_success
+
+        if [[ $avg_success -ge 66 ]]; then
+            echo -e "  ${GREEN}✓ Результат: ${avg_success}% успешных соединений${NC}"
+        elif [[ $avg_success -ge 33 ]]; then
+            echo -e "  ${YELLOW}○ Результат: ${avg_success}% успешных соединений${NC}"
+        else
+            echo -e "  ${RED}✗ Результат: ${avg_success}% успешных соединений${NC}"
+        fi
         echo ""
+
+        sleep 1
     done
 
     # Остановить ByeDPI
-    pkill -9 ciadpi 2>/dev/null || true
+    stop_byedpi
 
     # Найти лучшую стратегию
     local best_strategy=""
@@ -165,38 +253,49 @@ test_strategies() {
         fi
     done
 
+    # Вывод результатов
     echo ""
     echo -e "${GREEN}${BOLD}╔════════════════════════════════════════════════════════════╗${NC}"
     echo -e "${GREEN}${BOLD}║  РЕЗУЛЬТАТЫ ТЕСТИРОВАНИЯ                                   ║${NC}"
     echo -e "${GREEN}${BOLD}╚════════════════════════════════════════════════════════════╝${NC}"
     echo ""
 
-    # Вывести результаты, отсортированные по успешности
+    # Отсортировать и вывести результаты
     for strategy_name in $(for k in "${!results[@]}"; do echo "$k ${results[$k]}"; done | sort -k2 -rn | awk '{print $1}'); do
         rate=${results[$strategy_name]}
+        local params="${STRATEGIES[$strategy_name]}"
+
         if [[ $rate -ge 66 ]]; then
             echo -e "${GREEN}✓ $strategy_name: ${rate}%${NC}"
+            echo -e "  $params"
         elif [[ $rate -ge 33 ]]; then
             echo -e "${YELLOW}○ $strategy_name: ${rate}%${NC}"
+            echo -e "  $params"
         else
             echo -e "${RED}✗ $strategy_name: ${rate}%${NC}"
         fi
+        echo ""
     done
-
-    echo ""
 
     if [[ $best_rate -eq 0 ]]; then
         log_error "Ни одна стратегия не сработала!"
         echo ""
-        echo "Возможные причины:"
-        echo "  1. Non-RU сервер недоступен"
-        echo "  2. DPI блокирует все методы обхода"
-        echo "  3. Неправильный адрес сервера"
+        echo "Попробуйте:"
+        echo "1. Проверить доступность Non-RU сервера:"
+        echo "   curl -v https://$test_server"
+        echo ""
+        echo "2. Проверить базовый SOCKS5 (запустите вручную):"
+        echo "   ciadpi --ip 127.0.0.1 --port 1080 --disorder 1"
+        echo "   curl --socks5 127.0.0.1:1080 https://google.com"
+        echo ""
+        echo "3. Запустить с DEBUG=1 для подробных логов:"
+        echo "   DEBUG=1 sudo ./test-byedpi-strategies.sh $test_server"
         echo ""
         return 1
     fi
 
     log_success "Лучшая стратегия: ${BOLD}$best_strategy${NC} (${best_rate}% успешности)"
+    echo -e "  Параметры: ${STRATEGIES[$best_strategy]}"
     echo ""
 
     # Спросить, применить ли эту стратегию
@@ -205,7 +304,7 @@ test_strategies() {
     if [[ ! "$apply" =~ ^[Nn]$ ]]; then
         apply_strategy "$best_strategy"
     else
-        log_info "Стратегия не применена. Перезапускаем ByeDPI с базовыми параметрами..."
+        log_info "Стратегия не применена. Перезапускаем ByeDPI с дефолтными параметрами..."
         systemctl restart byedpi
     fi
 }
@@ -215,18 +314,18 @@ apply_strategy() {
     local strategy_name="$1"
     local params="${STRATEGIES[$strategy_name]}"
 
-    log_step "Применение стратегии $strategy_name..."
+    log_step "Применение стратегии: $strategy_name"
 
     # Создать новый systemd сервис
     cat > /etc/systemd/system/byedpi.service << EOF
 [Unit]
-Description=ByeDPI SOCKS5 Proxy for DPI Bypass
+Description=ByeDPI SOCKS5 Proxy for DPI Bypass (Strategy: $strategy_name)
 Documentation=https://github.com/hufrea/byedpi
 After=network.target
 
 [Service]
 Type=simple
-ExecStart=/usr/local/bin/ciadpi $params
+ExecStart=/usr/local/bin/ciadpi --ip 127.0.0.1 --port 1080 $params
 Restart=on-failure
 RestartSec=5s
 StandardOutput=journal
@@ -244,14 +343,21 @@ EOF
     if systemctl is-active --quiet byedpi; then
         log_success "ByeDPI сервис обновлен и перезапущен"
         echo ""
-        log_info "Параметры:"
-        echo "  $params"
+        log_info "Стратегия: $strategy_name"
+        log_info "Параметры: $params"
         echo ""
-        log_info "Теперь перезапустите x-ui для применения изменений:"
+        log_warn "Теперь перезапустите x-ui для применения изменений:"
         echo -e "${YELLOW}sudo systemctl restart x-ui${NC}"
+        echo ""
+        log_info "Проверьте работу:"
+        echo "  systemctl status byedpi"
+        echo "  curl --socks5 127.0.0.1:1080 https://google.com"
     else
         log_error "Не удалось запустить ByeDPI с новыми параметрами"
-        systemctl status byedpi
+        echo ""
+        echo "Проверьте логи:"
+        echo "  systemctl status byedpi"
+        echo "  journalctl -u byedpi -n 50"
         return 1
     fi
 }
@@ -259,16 +365,24 @@ EOF
 main() {
     echo ""
     echo -e "${CYAN}${BOLD}╔════════════════════════════════════════════════════════════╗${NC}"
-    echo -e "${CYAN}${BOLD}║  ByeDPI Strategy Auto-Selector                            ║${NC}"
+    echo -e "${CYAN}${BOLD}║  ByeDPI Strategy Auto-Selector v2.0                       ║${NC}"
     echo -e "${CYAN}${BOLD}╚════════════════════════════════════════════════════════════╝${NC}"
     echo ""
 
     check_root
     check_byedpi
 
-    echo -e "${YELLOW}Для тестирования стратегий нужен адрес вашего Non-RU сервера${NC}"
-    echo ""
-    read -p "Введите IP или домен Non-RU сервера (например, 45.12.135.9): " test_server </dev/tty
+    local test_server=""
+
+    # Получить адрес сервера из аргумента или запросить
+    if [[ -n "${1:-}" ]]; then
+        test_server="$1"
+        log_info "Используем адрес из аргумента: $test_server"
+    else
+        echo -e "${YELLOW}Для тестирования нужен адрес вашего Non-RU сервера${NC}"
+        echo ""
+        read -p "Введите IP или домен Non-RU сервера: " test_server </dev/tty
+    fi
 
     if [[ -z "$test_server" ]]; then
         log_error "Адрес сервера не может быть пустым"
@@ -277,7 +391,14 @@ main() {
 
     echo ""
     log_info "Будет протестировано ${#STRATEGIES[@]} стратегий"
-    log_warn "Это займет около 2-3 минут..."
+    log_warn "Это займет около 3-5 минут..."
+    echo ""
+
+    if [[ "${DEBUG:-0}" == "1" ]]; then
+        log_warn "DEBUG режим включен"
+    else
+        log_info "Для подробных логов: DEBUG=1 sudo $0 $test_server"
+    fi
     echo ""
 
     read -p "Начать тестирование? [Y/n]: " confirm </dev/tty
