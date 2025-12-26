@@ -7,6 +7,17 @@
 #
 # Usage: sudo ./install-byedpi-3xui.sh
 #
+# Key Features:
+# - Parses vless:// URLs automatically (no manual parameter entry)
+# - Uses proxySettings instead of dialerProxy (gRPC compatible)
+# - ByeDPI parameters optimized for Reality (no --tlsrec)
+# - Supports multiple servers with load balancing
+#
+# Version: 2.0 (2025-12-26)
+# - Fixed: gRPC + dialerProxy incompatibility (GitHub Issue #2232)
+# - Fixed: ByeDPI --tlsrec breaks Reality handshake
+# - Fixed: Added explicit x-ui restart instruction
+#
 ################################################################################
 
 set -euo pipefail
@@ -110,7 +121,7 @@ After=network.target
 
 [Service]
 Type=simple
-ExecStart=/usr/local/bin/ciadpi --ip 127.0.0.1 --port $BYEDPI_PORT --disorder 1 --split 2 --tlsrec 1+s --auto=torst
+ExecStart=/usr/local/bin/ciadpi --ip 127.0.0.1 --port $BYEDPI_PORT --oob 1 --disorder 1 --auto=torst
 Restart=on-failure
 RestartSec=5s
 StandardOutput=journal
@@ -409,28 +420,29 @@ generate_full_config() {
         }'
         fi
 
-        # Add sockopt with dialerProxy
-        stream_settings+=',
-        "sockopt": {
-          "dialerProxy": "byedpi-socks",
-          "tcpFastOpen": false,
-          "tcpKeepAliveInterval": 0,
-          "tcpMptcp": false,
-          "penetrate": false,
-          "addressPortStrategy": "none"
-        }'
-
         outbounds+=',
     {
       "protocol": "vless",
       "settings": {
-        "address": "'${server_ips[$i]}'",
-        "port": '${server_ports[$i]}',
-        "id": "'${server_uuids[$i]}'",
-        "flow": "'$flow'",
-        "encryption": "none"
+        "vnext": [
+          {
+            "address": "'${server_ips[$i]}'",
+            "port": '${server_ports[$i]}',
+            "users": [
+              {
+                "id": "'${server_uuids[$i]}'",
+                "flow": "'$flow'",
+                "encryption": "none"
+              }
+            ]
+          }
+        ]
       },
       "tag": "'${server_tags[$i]}'",
+      "proxySettings": {
+        "tag": "byedpi-socks",
+        "transportLayer": true
+      },
       "streamSettings": {'$stream_settings'
       }
     }'
@@ -597,6 +609,9 @@ show_final_instructions() {
     echo "4. Замените весь JSON на скопированный"
     echo ""
     echo "5. Нажмите Save и Restart Xray"
+    echo ""
+    echo -e "${RED}${BOLD}⚠️  ВАЖНО: После применения конфигурации обязательно перезапустите x-ui:${NC}"
+    echo -e "${YELLOW}sudo systemctl restart x-ui${NC}"
     echo ""
 
     log_info "📝 Информация о серверах:"
