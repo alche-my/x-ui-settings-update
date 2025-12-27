@@ -712,7 +712,7 @@ main() {
             rm -f "$temp_config"
 
             # Restart x-ui
-            restart_x_ui_service
+            restart_x_ui
         fi
     fi
 
