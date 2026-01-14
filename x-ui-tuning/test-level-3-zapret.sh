@@ -299,7 +299,7 @@ CURRENT_STRATEGY="/opt/zapret-current-strategy.json"
 LOG_FILE="/var/log/zapret-health-check.log"
 NON_RU_IP="{{NON_RU_IP}}"
 NON_RU_PORT="{{NON_RU_PORT}}"
-ZAPRET_BIN="/opt/zapret/nfqws/nfqws"
+ZAPRET_BIN="/opt/zapret/nfq/nfqws"
 
 log_message() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" >> "$LOG_FILE"
@@ -628,12 +628,12 @@ test_create_auto_strategy_selector() {
 test_create_nfqws_service() {
     test_start "create_nfqws_service - Создание systemd service файла"
 
-    local service_content=$(create_nfqws_service_content "/opt/zapret/nfqws/nfqws" "--dpi-desync=split2")
+    local service_content=$(create_nfqws_service_content "/opt/zapret/nfq/nfqws" "--dpi-desync=split2")
 
     if assert_contains "$service_content" "[Unit]" && \
        assert_contains "$service_content" "[Service]" && \
        assert_contains "$service_content" "[Install]" && \
-       assert_contains "$service_content" "ExecStart=/opt/zapret/nfqws/nfqws" && \
+       assert_contains "$service_content" "ExecStart=/opt/zapret/nfq/nfqws" && \
        assert_contains "$service_content" "--qnum=200" && \
        assert_contains "$service_content" "Restart=always"; then
         test_pass
@@ -645,7 +645,7 @@ test_create_nfqws_service() {
 test_nfqws_service_security() {
     test_start "systemd service - Проверка security параметров"
 
-    local service_content=$(create_nfqws_service_content "/opt/zapret/nfqws/nfqws" "--dpi-desync=split2")
+    local service_content=$(create_nfqws_service_content "/opt/zapret/nfq/nfqws" "--dpi-desync=split2")
 
     if assert_contains "$service_content" "NoNewPrivileges=true" && \
        assert_contains "$service_content" "PrivateTmp=true"; then

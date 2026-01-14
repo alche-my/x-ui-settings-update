@@ -34,7 +34,7 @@ readonly BOLD='\033[1m'
 
 # Константы
 readonly ZAPRET_DIR="/opt/zapret"
-readonly ZAPRET_BIN="/opt/zapret/nfqws/nfqws"
+readonly ZAPRET_BIN="/opt/zapret/nfq/nfqws"
 readonly STRATEGY_DB="/opt/zapret-strategies.json"
 readonly CURRENT_STRATEGY="/opt/zapret-current-strategy.json"
 readonly HEALTH_CHECK_SCRIPT="/opt/zapret-health-check.sh"
@@ -196,7 +196,7 @@ clone_and_build_zapret() {
     log_info "Компиляция nfqws..."
 
     # Собираем nfqws
-    cd "$ZAPRET_DIR/nfqws"
+    cd "$ZAPRET_DIR/nfq"
     make 2>&1 | tail -n 5
 
     # Проверяем что бинарник создан
@@ -450,7 +450,7 @@ CURRENT_STRATEGY="/opt/zapret-current-strategy.json"
 LOG_FILE="/var/log/zapret-health-check.log"
 NON_RU_IP="{{NON_RU_IP}}"
 NON_RU_PORT="{{NON_RU_PORT}}"
-ZAPRET_BIN="/opt/zapret/nfqws/nfqws"
+ZAPRET_BIN="/opt/zapret/nfq/nfqws"
 
 log_message() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" >> "$LOG_FILE"
