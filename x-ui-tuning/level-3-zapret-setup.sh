@@ -167,6 +167,7 @@ install_dependencies() {
         iptables \
         iptables-persistent \
         libnetfilter-queue-dev \
+        libcap-dev \
         libcap2-bin \
         curl \
         jq \
