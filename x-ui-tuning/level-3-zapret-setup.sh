@@ -170,6 +170,7 @@ install_dependencies() {
         libcap-dev \
         libcap2-bin \
         zlib1g-dev \
+        libmnl-dev \
         curl \
         jq \
         netcat-openbsd
