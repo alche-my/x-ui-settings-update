@@ -169,6 +169,7 @@ install_dependencies() {
         libnetfilter-queue-dev \
         libcap-dev \
         libcap2-bin \
+        zlib1g-dev \
         curl \
         jq \
         netcat-openbsd
