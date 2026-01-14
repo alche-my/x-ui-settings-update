@@ -161,16 +161,18 @@ install_dependencies() {
     apt-get update -qq
 
     # Устанавливаем необходимые пакеты
+    # Основано на Makefile из https://github.com/bol-van/zapret/blob/master/nfq/Makefile
     apt-get install -y -qq \
         git \
         build-essential \
         iptables \
         iptables-persistent \
-        libnetfilter-queue-dev \
-        libcap-dev \
-        libcap2-bin \
-        zlib1g-dev \
-        libmnl-dev \
+        libnetfilter-queue-dev `# NFQUEUE packet handling` \
+        libnfnetlink-dev `# netfilter netlink interface` \
+        libmnl-dev `# minimal netlink library` \
+        libcap-dev `# capabilities management` \
+        zlib1g-dev `# compression library` \
+        libsystemd-dev `# systemd integration` \
         curl \
         jq \
         netcat-openbsd
