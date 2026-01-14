@@ -131,6 +131,12 @@ parse_vless_url() {
         return 1
     fi
 
+    # Проверка что URL содержал @ и : (не просто строка)
+    if [[ "$UUID" == "$NON_RU_IP" ]] || [[ "$NON_RU_IP" == "$NON_RU_PORT" ]]; then
+        log_error "Невалидный формат vless:// URL (отсутствует @ или :)"
+        return 1
+    fi
+
     log_success "VLESS URL успешно распарсен"
     echo ""
     log_info "Параметры Non-RU VPS:"
